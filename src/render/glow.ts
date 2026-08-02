@@ -34,6 +34,8 @@
  *    adding light around them is exactly a glow — and it is one pass, not two.
  */
 
+import { rgba, type RGB } from '../config';
+
 /** Accumulator resolution, relative to the target's device pixels. */
 const RES = 0.4;
 /** Halvings of the accumulator. Each doubles the halo's reach. */
@@ -193,6 +195,40 @@ export function radialSprite(key: string, stops: readonly [number, string][], si
   sprites.set(key, c);
   return c;
 }
+
+/**
+ * The two falloffs every lit thing in the game uses, shared rather than
+ * redefined per module: a wide soft *halo* that says "this object is a light
+ * source standing in a dark room", and a tighter *glow* for the emissive parts
+ * themselves. Both are keyed on their arguments, so a hundred call sites across
+ * the scene and the ship still only ever bake one bitmap each.
+ */
+export const haloSprite = (col: RGB) =>
+  radialSprite(`halo${col}`, [
+    [0, rgba(col, 0.24)],
+    [0.5, rgba(col, 0.07)],
+    [1, rgba(col, 0)],
+  ]);
+
+export const glowSprite = (col: RGB, inner: number) =>
+  radialSprite(`glow${col}:${inner}`, [
+    [0, rgba(col, inner)],
+    [1, rgba(col, 0)],
+  ]);
+
+/**
+ * A hard-cored flare: white-hot at the centre, falling to the colour, then out.
+ * This is what an engine bell or a muzzle looks like, and a plain single-stop
+ * falloff never gets there — the core has to clip to white or it reads as a
+ * coloured smudge rather than as something too bright to look at.
+ */
+export const flareSprite = (col: RGB, inner = 1) =>
+  radialSprite(`flare${col}:${inner}`, [
+    [0, `rgba(255,255,255,${inner})`],
+    [0.22, rgba(col, inner * 0.85)],
+    [0.6, rgba(col, inner * 0.2)],
+    [1, rgba(col, 0)],
+  ]);
 
 /** Draw a cached radial sprite centred on a point, at a given radius. */
 export function drawRadial(

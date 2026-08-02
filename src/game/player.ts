@@ -7,7 +7,7 @@ import {
   STRIKE_COOLDOWN,
   STRIKE_SPEED,
 } from '../config';
-import { dampAngle } from '../engine/math';
+import { clamp, dampAngle } from '../engine/math';
 import { view } from '../viewport';
 import type { StrikePlan } from './strike';
 
@@ -58,6 +58,13 @@ export class Player {
   stretch = 0;
   /** 0..1 charge-up while aiming, purely visual. */
   charge = 0;
+  /**
+   * -1..1 roll, from how much of the drift is sideways to where the nose is
+   * pointing. Purely cosmetic, and the single cheapest thing in this file: a
+   * top-down ship that never banks reads as a sprite being translated, and one
+   * that leans into its own drift reads as a machine fighting its momentum.
+   */
+  bank = 0;
 
   readonly trail: Afterimage[] = [];
   private trailClock = 0;
@@ -80,6 +87,7 @@ export class Player {
     this.stun = 0;
     this.stretch = 0;
     this.charge = 0;
+    this.bank = 0;
     this.trail.length = 0;
   }
 
@@ -180,6 +188,15 @@ export class Player {
     const rate = this.striking ? 40 : 11;
     this.stretch += (target - this.stretch) * (1 - Math.exp(-rate * dtReal));
     this.charge += ((aiming ? 1 : 0) - this.charge) * (1 - Math.exp(-9 * dtReal));
+
+    // Roll follows the *sideways* part of the drift. Because the nose tracks
+    // the aim while the body keeps whatever momentum the last strike left, this
+    // fires exactly when a player swings their aim across their own travel —
+    // the ship leans into the turn without any of it being scripted.
+    const c = Math.cos(this.angle);
+    const s = Math.sin(this.angle);
+    const lat = this.striking ? 0 : clamp((-s * this.vx + c * this.vy) / 620, -1, 1);
+    this.bank += (lat - this.bank) * (1 - Math.exp(-7 * dtReal));
 
     // Afterimages are sampled on a timer rather than per frame so the trail has
     // the same density on a 60Hz laptop and a 240Hz monitor.

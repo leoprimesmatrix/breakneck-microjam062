@@ -35,10 +35,70 @@ function scrim(ctx: CanvasRenderingContext2D, a: number) {
 }
 
 // --------------------------------------------------------------------- title
+/**
+ * The cold open.
+ *
+ * A title screen that fades up is a title screen nobody watches. This one
+ * *arrives*: the first frame the game ever shows is pure white, the shutter is
+ * closed over it, and both get out of the way in under two thirds of a second
+ * while the wordmark slams down to size through a chromatic split that converges
+ * on it. Then a second, smaller pop at the moment it lands, and two shockwaves
+ * off the mark.
+ *
+ * All of it is driven off `titleTime` and none of it touches the simulation, so
+ * it costs one function and a handful of full-screen fills that are only ever
+ * paid in the first second of the process's life.
+ */
+interface Intro {
+  /** 0..1 white-out over the finished frame. */
+  flash: number;
+  /** 0..1 how closed the letterbox shutter still is. */
+  bars: number;
+  /** 0..1 how far the wordmark still has to fall. Drives scale and chroma. */
+  punch: number;
+}
+
+function titleIntro(t: number): Intro {
+  // Held for three frames at full, then a squared decay. A linear fade reads as
+  // a dissolve; this reads as a flashbulb.
+  const blast = t < 0.05 ? 1 : Math.max(0, (1 - (t - 0.05) / 0.36) ** 2.2);
+  // The landing pop, timed to the moment the mark stops moving.
+  const land = clamp01(1 - Math.abs(t - 0.36) / 0.13) ** 2;
+  return {
+    flash: Math.max(blast, land * 0.5),
+    bars: 1 - easeOutQuint(clamp01(t / 0.66)),
+    punch: 1 - easeOutQuint(clamp01((t - 0.06) / 0.56)),
+  };
+}
+
+/** Full-width streaks tearing across the frame as the shutter opens. */
+function introStreaks(ctx: CanvasRenderingContext2D, t: number) {
+  const p = clamp01((t - 0.04) / 0.6);
+  if (p <= 0 || p >= 1) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 7; i++) {
+    const seed = (i * 0.137) % 1;
+    const y = view.h * (0.08 + seed * 0.84);
+    const life = clamp01((p - seed * 0.32) / 0.42);
+    if (life <= 0 || life >= 1) continue;
+    const len = view.w * (0.3 + seed * 0.5);
+    const x = -len + easeOutQuint(life) * (view.w + len * 2);
+    const g = ctx.createLinearGradient(x, 0, x + len, 0);
+    g.addColorStop(0, rgba(COL.strike, 0));
+    g.addColorStop(0.8, rgba(COL.strike, (1 - life) * 0.5));
+    g.addColorStop(1, rgba(COL.playerCore, (1 - life) * 0.7));
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, len, 1 + seed * 2.4);
+  }
+  ctx.restore();
+}
+
 function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   const S = clamp(view.h / 860, 0.6, 1.5);
   const t = game.titleTime;
   const cx = view.w * 0.5;
+  const intro = titleIntro(t);
 
   scrim(ctx, 0.7 * stage(t, 0, 0.5) + 0.1);
 
@@ -82,31 +142,101 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   const track = 0.2;
   const x0 = cx - w * 0.5;
   const w1 = vecWidth('AFTER', { size, tracking: track });
-  const drawMark = (hot: boolean) => {
+  const drawMark = (hot: boolean, tint?: string) => {
     drawVec(ctx, 'AFTER', x0, wy, {
       size,
       weight: 0.108,
       tracking: track,
       baseline: 'mid',
-      color: hot ? rgba(COL.playerCore, 0.85) : rgba(COL.ink, 1),
-      glow: hot ? 2 : 1.7,
+      color: tint ?? (hot ? rgba(COL.playerCore, 0.85) : rgba(COL.ink, 1)),
+      // Restrained on purpose. AFTER in ice and BURN in heat is the entire
+      // fiction in nine letters, and at the old halo weight the additive pass
+      // pushed both cores to the same white — the one committed branding
+      // decision the mark makes, erased by its own glow.
+      glow: tint ? 0 : hot ? 1.6 : 1.05,
       glowColor: rgba(COL.strike, 1),
       slant: 0.1,
-      progress: hot ? 1 : stage(t, 0.1, 0.85),
     });
     drawVec(ctx, 'BURN', x0 + w1 + track * size, wy, {
       size,
       weight: 0.108,
       tracking: track,
       baseline: 'mid',
-      color: hot ? rgba(COL.playerCore, 0.85) : rgba(COL.warn, 1),
-      glow: hot ? 2 : 1.7,
+      color: tint ?? (hot ? rgba(COL.playerCore, 0.85) : rgba(COL.warn, 1)),
+      // Restrained on purpose. AFTER in ice and BURN in heat is the entire
+      // fiction in nine letters, and at the old halo weight the additive pass
+      // pushed both cores to the same white — the one committed branding
+      // decision the mark makes, erased by its own glow.
+      glow: tint ? 0 : hot ? 1.6 : 1.05,
       glowColor: hot ? rgba(COL.strike, 1) : rgba(COL.warn, 1),
       slant: 0.1,
-      progress: hot ? 1 : stage(t, 0.5, 0.85),
     });
   };
-  drawMark(false);
+
+  // The slam, scaled about the mark's own centre so it falls straight onto its
+  // resting place instead of sliding in from somewhere.
+  const slam = (draw: () => void) => {
+    if (intro.punch <= 0.001) {
+      draw();
+      return;
+    }
+    ctx.save();
+    ctx.translate(cx, wy);
+    const k = 1 + intro.punch * 0.38;
+    ctx.scale(k, k);
+    ctx.translate(-cx, -wy);
+    draw();
+    ctx.restore();
+  };
+
+  // Chromatic split, converging: two tinted ghosts either side that slide into
+  // the mark as it lands. It is the cheapest way to make a static lockup look
+  // like it is being *resolved by a lens* rather than blitted into place. They
+  // are drawn without glow — the ghosts are a lens artefact, and an artefact
+  // that blooms is just a second wordmark.
+  if (intro.punch > 0.01) {
+    const off = intro.punch * 30 * S;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = Math.min(1, intro.punch * 1.4);
+    for (const [dx, col] of [
+      [-off, 'rgba(255,52,86,1)'], [off, 'rgba(72,236,255,1)'],
+    ] as const) {
+      ctx.save();
+      ctx.translate(dx, 0);
+      slam(() => drawMark(false, col));
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  slam(() => drawMark(false));
+
+  // The shock off the mark, as a bar tearing outward along its baseline rather
+  // than as a ring.
+  //
+  // Rings were the first instinct and they were wrong twice over: an expanding
+  // ellipse spends most of its life *large*, so it hangs around the lockup
+  // reading as a badge outline rather than as an event — and a circle is the
+  // wrong gesture for a game whose whole verb is a horizontal line. Two bars
+  // that burst sideways and collapse to nothing say "speed" in a way a ring
+  // cannot, and they cost one gradient each.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 2; i++) {
+    const p = clamp01((t - 0.12 - i * 0.1) / 0.5);
+    if (p <= 0.001 || p >= 1) continue;
+    const e = easeOutQuint(p);
+    const half = e * view.w * 0.75;
+    const bh = (1 - e) * size * 0.42 + 1;
+    const col = i === 0 ? COL.strike : COL.warn;
+    const gd = ctx.createLinearGradient(cx - half, 0, cx + half, 0);
+    gd.addColorStop(0, rgba(col, 0));
+    gd.addColorStop(0.5, rgba(col, (1 - p) * (1 - p) * 0.6));
+    gd.addColorStop(1, rgba(col, 0));
+    ctx.fillStyle = gd;
+    ctx.fillRect(cx - half, wy - bh * 0.5, half * 2, bh);
+  }
+  ctx.restore();
 
   // A highlight sweep that crosses the mark every few seconds.
   const sweep = (game.clock * 0.22) % 1;
@@ -303,6 +433,31 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
       color: rgba(COL.warn, 0.95),
       slant: 0.06,
     });
+    ctx.restore();
+  }
+
+  // --- the cold open, over everything it is meant to be hiding.
+  introStreaks(ctx, t);
+
+  if (intro.bars > 0.001) {
+    const bh = view.h * 0.5 * intro.bars;
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, view.w, bh);
+    ctx.fillRect(0, view.h - bh, view.w, bh);
+    // A lit edge on each blade. Without it the bars are two black rectangles
+    // shrinking, which reads as a rendering glitch; with it they are a shutter.
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = rgba(COL.strike, intro.bars * 0.85);
+    ctx.fillRect(0, bh - 1.6 * S, view.w, 1.6 * S);
+    ctx.fillRect(0, view.h - bh, view.w, 1.6 * S);
+    ctx.restore();
+  }
+
+  if (intro.flash > 0.002) {
+    ctx.save();
+    ctx.fillStyle = rgba(COL.playerCore, Math.min(1, intro.flash));
+    ctx.fillRect(0, 0, view.w, view.h);
     ctx.restore();
   }
 }

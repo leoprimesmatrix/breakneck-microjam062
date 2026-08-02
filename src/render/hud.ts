@@ -478,19 +478,64 @@ export function drawEnemyIcon(ctx: CanvasRenderingContext2D, kind: string, clock
   ctx.stroke();
   ctx.restore();
 
-  if (kind === 'ward') {
-    ctx.strokeStyle = rgba(col, 1);
-    ctx.lineWidth = 4;
+  // The one identifying part of each body, carried over from `bodies.ts`. A
+  // codex entry has to be matched against something that just killed the player,
+  // so the tell they saw in the arena — the ward's plate gaps, the spine's
+  // muzzle brake, the mote's molten core — has to be on the card too.
+  if (kind === 'mote') {
+    ctx.strokeStyle = rgba(col, 0.9);
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(0, 0, r * 1.35, -0.95 + Math.sin(clock) * 0.6, 0.95 + Math.sin(clock) * 0.6);
+    for (const a of [-1.7, 0.3, 2.4]) {
+      ctx.moveTo(1, -1);
+      ctx.lineTo(Math.cos(a) * r * 0.8 + 1, Math.sin(a) * r * 0.8 - 1);
+    }
     ctx.stroke();
+    ctx.fillStyle = rgba(col, 0.85);
+    ctx.beginPath();
+    ctx.arc(1, -1, r * 0.3, 0, TAU);
+    ctx.fill();
+  }
+  if (kind === 'seeder') {
+    ctx.fillStyle = rgba(COL.mote, 0.95);
+    for (let i = 0; i < 3; i++) {
+      const a = clock * 2 + (i / 3) * TAU;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * r * 0.4, Math.sin(a) * r * 0.4, 2, 0, TAU);
+      ctx.fill();
+    }
+  }
+  if (kind === 'ward') {
+    const face = Math.sin(clock) * 0.6;
+    for (let i = 0; i < 3; i++) {
+      const a0 = face - 0.95 + i * 0.63 + 0.07;
+      ctx.strokeStyle = rgba(col, 1);
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 1.38, a0, a0 + 0.5);
+      ctx.stroke();
+    }
+    ctx.fillStyle = rgba(col, 0.95);
+    for (const s of [-1, 1] as const) {
+      ctx.beginPath();
+      ctx.arc(Math.cos(face + s * 0.95) * r * 1.38, Math.sin(face + s * 0.95) * r * 1.38, 2.4, 0, TAU);
+      ctx.fill();
+    }
   }
   if (kind === 'spine') {
     ctx.strokeStyle = rgba(col, 0.9);
     ctx.lineWidth = 2.6;
     ctx.beginPath();
     ctx.moveTo(r * 0.3, 0);
-    ctx.lineTo(r * 1.25, 0);
+    ctx.lineTo(r * 1.3, 0);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (const d of [1.0, 1.22] as const) {
+      ctx.moveTo(r * d, -r * 0.2);
+      ctx.lineTo(r * d, r * 0.2);
+    }
     ctx.stroke();
   }
 

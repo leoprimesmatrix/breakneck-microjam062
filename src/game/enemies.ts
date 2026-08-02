@@ -84,42 +84,46 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
  */
 export function silhouette(kind: EnemyKind, r: number): [number, number][] {
   switch (kind) {
-    // A chipped shard of something still burning: no two flanks alike.
+    // A chipped shard of something still burning. Seven flanks, no two alike and
+    // no two parallel — a stone that was broken off, not cut.
     case 'mote':
       return [
-        [0, -r], [r * 0.5, -r * 0.28], [r * 0.42, r * 0.36],
-        [0, r], [-r * 0.46, r * 0.3], [-r * 0.52, -r * 0.34],
+        [0, -r], [r * 0.44, -r * 0.52], [r * 0.62, r * 0.02], [r * 0.3, r * 0.58],
+        [-r * 0.18, r], [-r * 0.56, r * 0.34], [-r * 0.5, -r * 0.4],
       ];
-    // A sealed pod. The chamfered corners are the whole tell: something was
-    // manufactured here, with a bevel, by someone.
-    case 'seeder': {
-      const c = r * 0.36;
+    // A sealed pod with a waist. The chamfers say it was manufactured with a
+    // bevel by someone; the pinch at the equator says the two halves come apart,
+    // which is the one thing the player needs to believe about it.
+    case 'seeder':
       return [
-        [-r + c, -r], [r - c, -r], [r, -r + c], [r, r - c],
-        [r - c, r], [-r + c, r], [-r, r - c], [-r, -r + c],
+        [-r * 0.52, -r], [r * 0.52, -r], [r, -r * 0.46], [r * 0.86, 0], [r, r * 0.46],
+        [r * 0.52, r], [-r * 0.52, r], [-r, r * 0.46], [-r * 0.86, 0], [-r, -r * 0.46],
       ];
-    }
-    // An armoured shell, stretched along its prow rather than a perfect hex.
-    case 'ward': {
-      const pts: [number, number][] = [];
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * TAU;
-        pts.push([Math.cos(a) * r * 1.06, Math.sin(a) * r * 0.9]);
-      }
-      return pts;
-    }
-    // A swept interceptor: lance nose, raked wings, a notch cut in the tail.
+    // An armoured shell: seven plates, deliberately off-balance, so it never
+    // resolves into the regular hexagon a generator would have produced.
+    case 'ward':
+      return [
+        [r * 1.04, 0], [r * 0.52, -r * 0.9], [-r * 0.46, -r * 0.94], [-r, -r * 0.3],
+        [-r * 0.86, r * 0.52], [-r * 0.1, r * 0.98], [r * 0.72, r * 0.62],
+      ];
+    // A swept interceptor: lance nose, forward canards, raked wings, and a deep
+    // notch either side where the intakes are cut into the body.
     case 'lancer':
       return [
-        [r * 1.5, 0], [r * 0.15, -r * 0.45], [-r * 0.62, -r], [-r * 0.3, -r * 0.3],
-        [-r * 0.9, 0], [-r * 0.3, r * 0.3], [-r * 0.62, r], [r * 0.15, r * 0.45],
+        [r * 1.62, 0], [r * 0.6, -r * 0.22], [r * 0.22, -r * 0.52], [-r * 0.5, -r * 1.02],
+        [-r * 0.82, -r * 0.86], [-r * 0.34, -r * 0.26], [-r * 0.98, -r * 0.14],
+        [-r * 0.98, r * 0.14], [-r * 0.34, r * 0.26], [-r * 0.82, r * 0.86],
+        [-r * 0.5, r * 1.02], [r * 0.22, r * 0.52], [r * 0.6, r * 0.22],
       ];
-    // A gun housing bolted to the floor — heavy lugs, not decorative spikes.
+    // A gun housing bolted to the floor. A flattened dodecagon reads as a heavy
+    // machined casing; the anchor lugs are drawn separately, and stay put in the
+    // world while the housing above them turns.
     case 'spine': {
       const pts: [number, number][] = [];
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * TAU;
-        pts.push([Math.cos(a) * (i % 2 === 0 ? r : r * 0.62), Math.sin(a) * (i % 2 === 0 ? r : r * 0.62)]);
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * TAU + Math.PI / 12;
+        const k = i % 3 === 0 ? 0.78 : 0.96;
+        pts.push([Math.cos(a) * r * k, Math.sin(a) * r * k]);
       }
       return pts;
     }
@@ -131,12 +135,12 @@ export const WARD_ARC = 1.16;
 /** How fast that shield can swing toward you. Slower than you can flank. */
 const WARD_TURN = 1.95;
 
-const LANCER_MARK = 1.05;
+export const LANCER_MARK = 1.05;
 const LANCER_CHARGE_SPEED = 1180;
-const LANCER_CHARGE_TIME = 0.62;
+export const LANCER_CHARGE_TIME = 0.62;
 const LANCER_REST = 1.5;
 
-const SPINE_PERIOD = 2.3;
+export const SPINE_PERIOD = 2.3;
 const ORB_SPEED = 205;
 export const ORB_R = 10;
 

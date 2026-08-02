@@ -38,6 +38,14 @@ export interface QualityLevel {
   grain: boolean;
   /** Blurred halos behind display type. */
   textGlow: boolean;
+  /**
+   * Environment detail. 2 = the whole room (substructure plates, recorder
+   * sweep, drifting haze, lit grid nodes); 1 = plates and nodes only; 0 = the
+   * grid and nothing else. None of it is information — it is the set the fight
+   * happens in — which is exactly why it can be given up before anything else
+   * that is drawn *inside* the arena.
+   */
+  deco: 0 | 1 | 2;
   /** Ceiling on the device pixel ratio of the visible canvas. */
   dprCap: number;
 }
@@ -56,12 +64,12 @@ export interface QualityLevel {
  * that sheds the information it is made of has not degraded gracefully.
  */
 const LADDER: QualityLevel[] = [
-  { sceneScale: 1.0, bloom: 2, bloomDiv: 3, chroma: true, grain: true, textGlow: true, dprCap: 2 },
-  { sceneScale: 1.0, bloom: 2, bloomDiv: 3, chroma: true, grain: false, textGlow: true, dprCap: 2 },
-  { sceneScale: 0.85, bloom: 2, bloomDiv: 4, chroma: false, grain: false, textGlow: true, dprCap: 2 },
-  { sceneScale: 0.72, bloom: 1, bloomDiv: 4, chroma: false, grain: false, textGlow: true, dprCap: 1.6 },
-  { sceneScale: 0.6, bloom: 1, bloomDiv: 5, chroma: false, grain: false, textGlow: false, dprCap: 1.35 },
-  { sceneScale: 0.5, bloom: 0, bloomDiv: 5, chroma: false, grain: false, textGlow: false, dprCap: 1.1 },
+  { sceneScale: 1.0, bloom: 2, bloomDiv: 3, chroma: true, grain: true, textGlow: true, deco: 2, dprCap: 2 },
+  { sceneScale: 1.0, bloom: 2, bloomDiv: 3, chroma: true, grain: false, textGlow: true, deco: 2, dprCap: 2 },
+  { sceneScale: 0.85, bloom: 2, bloomDiv: 4, chroma: false, grain: false, textGlow: true, deco: 2, dprCap: 2 },
+  { sceneScale: 0.72, bloom: 1, bloomDiv: 4, chroma: false, grain: false, textGlow: true, deco: 1, dprCap: 1.6 },
+  { sceneScale: 0.6, bloom: 1, bloomDiv: 5, chroma: false, grain: false, textGlow: false, deco: 1, dprCap: 1.35 },
+  { sceneScale: 0.5, bloom: 0, bloomDiv: 5, chroma: false, grain: false, textGlow: false, deco: 0, dprCap: 1.1 },
 ];
 
 /**

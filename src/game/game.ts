@@ -184,6 +184,16 @@ export class Game {
     this.runs = this.load(RUNS_KEY);
     this.player.reset();
     this.beginAttract();
+
+    // The world behind the title takes the hit too. The screen-space flash lives
+    // in `screens.ts` because the title is drawn after the world is composited —
+    // but shake, lens punch and a hard chromatic fringe all belong to the scene
+    // buffer, and firing them here is what makes the arena *lurch* under the
+    // wordmark instead of sitting there politely while it lands.
+    this.juice.addShake(30);
+    this.juice.addPunch(0.22);
+    this.juice.addFringe(1.8);
+    this.juice.addFlash(1, COL.playerCore);
   }
 
   private load(key: string) {
@@ -274,6 +284,15 @@ export class Game {
     this.state = 'play';
     this.audio.setRunning(true);
     this.nextWave();
+
+    // Dropping in. The same beat as the title's arrival, half the size: the run
+    // should start on an impact rather than on a cut.
+    this.juice.addFlash(0.75, COL.playerCore);
+    this.juice.addPunch(0.16);
+    this.juice.addFringe(1.2);
+    this.juice.addShake(15);
+    this.particles.ring(this.player.x, this.player.y, COL.strike, 260, 0.5, 5);
+    this.particles.ring(this.player.x, this.player.y, COL.playerCore, 150, 0.34, 3);
   }
 
   private nextWave() {
