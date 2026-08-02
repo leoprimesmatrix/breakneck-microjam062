@@ -71,13 +71,39 @@ export function toggleStats() {
 }
 
 /**
+ * Whether the browser will give this machine a GPU at all.
+ *
+ * Not a perfect proxy for canvas2d acceleration, but a decisive one in the case
+ * that matters: when a browser has hardware acceleration switched off it fails
+ * this too, and reports `GL_RENDERER = Disabled`. That single fact is the
+ * difference between a game that is too heavy and a browser that has been told
+ * not to use the graphics card — and without it, the two are indistinguishable
+ * from the player's chair. Probed once, lazily, and never in a frame path.
+ */
+let gpuOk: boolean | null = null;
+function hasGpu() {
+  if (gpuOk === null) {
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 8;
+      gpuOk = !!(c.getContext('webgl2') || c.getContext('webgl'));
+    } catch {
+      gpuOk = false;
+    }
+  }
+  return gpuOk;
+}
+
+/**
  * Frame time and the tier the governor has settled on. Worth shipping rather
  * than keeping behind a dev flag: "it runs badly" is the one bug report that
  * cannot be acted on without knowing which of those two numbers is wrong.
  */
 function drawStats(ctx: CanvasRenderingContext2D) {
   const ms = quality.smoothMs;
-  const text = `${Math.round(1000 / Math.max(0.1, ms))} FPS   ${ms.toFixed(1)} MS   Q${quality.level + 1}/${quality.tiers}`;
+  const text =
+    `${Math.round(1000 / Math.max(0.1, ms))} FPS   ${ms.toFixed(1)} MS   Q${quality.level + 1}/${quality.tiers}` +
+    (hasGpu() ? '' : '   ⚠ GPU ACCEL OFF');
   const y = view.h - 12;
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
