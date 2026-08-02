@@ -15,6 +15,8 @@ const enum Shape {
   Streak = 1,
   Ring = 2,
   Bar = 4,
+  /** An edge of a dead body: a thin bar that keeps its own tumble. */
+  Frag = 5,
 }
 
 interface P {
@@ -125,6 +127,55 @@ export class Particles {
     }
   }
 
+  /**
+   * The body itself coming apart: one fragment per edge of the silhouette that
+   * just died, thrown outward with the strike's momentum and left tumbling.
+   *
+   * This is the difference between "a thing exploded here" and "*that* thing
+   * broke". Generic sparks say nothing; the outline of a ward scattering as six
+   * hexagon edges says exactly what was lost, in its own colour, every time.
+   */
+  shatter(
+    x: number,
+    y: number,
+    pts: readonly [number, number][],
+    rot: number,
+    col: RGB,
+    kickX: number,
+    kickY: number,
+    rng: Rng,
+  ) {
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      const mx = (a[0] + b[0]) * 0.5;
+      const my = (a[1] + b[1]) * 0.5;
+      const ex = b[0] - a[0];
+      const ey = b[1] - a[1];
+
+      const p = this.take();
+      p.x = x + mx * cos - my * sin;
+      p.y = y + mx * sin + my * cos;
+      p.rot = rot + Math.atan2(ey, ex);
+      p.size = Math.hypot(ex, ey);
+      p.width = 2.4;
+      // Fly apart from the centre, carried by whatever killed it.
+      const d = Math.hypot(mx, my) || 1;
+      const spd = randRange(rng, 90, 260);
+      p.vx = ((mx * cos - my * sin) / d) * spd + kickX;
+      p.vy = ((mx * sin + my * cos) / d) * spd + kickY;
+      p.vrot = randRange(rng, -11, 11);
+      p.drag = randRange(rng, 2.6, 4);
+      p.maxLife = randRange(rng, 0.3, 0.6);
+      p.life = p.maxLife;
+      p.col = col;
+      p.shape = Shape.Frag;
+      p.active = true;
+    }
+  }
+
   /** A short, fat, fading bar — the "impact plate" under a kill. */
   plate(x: number, y: number, ang: number, col: RGB, len: number) {
     const p = this.take();
@@ -186,6 +237,16 @@ export class Particles {
           ctx.fillStyle = rgba(p.col, t * 0.7);
           const h = p.width * t;
           ctx.fillRect(-p.size * 0.5, -h * 0.5, p.size, h);
+          ctx.restore();
+          break;
+        }
+        case Shape.Frag: {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = rgba(p.col, t * 0.9);
+          const th = Math.max(0.8, p.width * t);
+          ctx.fillRect(-p.size * 0.5, -th * 0.5, p.size, th);
           ctx.restore();
           break;
         }

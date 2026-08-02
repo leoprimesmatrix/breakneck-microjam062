@@ -28,7 +28,7 @@ import { Juice } from '../engine/juice';
 import { TAU, clamp, damp, makeRng, randRange, type Rng } from '../engine/math';
 import { Particles } from '../engine/particles';
 import { view } from '../viewport';
-import { ORB_R, SPECS, Swarm, type Enemy, type EnemyKind } from './enemies';
+import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
 import { Player } from './player';
 import { clonePlan, solveStrike, type StrikePlan } from './strike';
 import { Director } from './waves';
@@ -52,6 +52,26 @@ export interface Popup {
 export interface HintCard {
   kind: EnemyKind;
   life: number;
+}
+
+/** A strike line burned into the floor, fading. */
+export interface Scar {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  life: number;
+  max: number;
+}
+
+/** A scorch mark where something died. */
+export interface Burn {
+  x: number;
+  y: number;
+  r: number;
+  col: RGB;
+  life: number;
+  max: number;
 }
 
 const BEST_KEY = 'afterburn.best.v1';
@@ -127,6 +147,14 @@ export class Game {
 
   readonly popups: Popup[] = [];
   readonly hints: HintCard[] = [];
+  /**
+   * The floor remembers. Strike lines scar it for a couple of seconds, kills
+   * scorch it for longer. Cosmetically cheap, psychologically load-bearing: an
+   * arena that keeps the marks of what you did reads as a place, and a place is
+   * the one thing procedurally-flavoured games always fail to feel like.
+   */
+  readonly scars: Scar[] = [];
+  readonly burns: Burn[] = [];
   /** Species met this run, in the order they were met — the pause codex. */
   readonly seenKinds = new Set<EnemyKind>();
 
@@ -190,6 +218,8 @@ export class Game {
   private beginAttract() {
     this.swarm.reset();
     this.particles.reset();
+    this.scars.length = 0;
+    this.burns.length = 0;
     this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
     this.player.reset();
     // NB: titleTime is deliberately *not* reset here. Attract mode restocks the
@@ -217,6 +247,8 @@ export class Game {
     this.director.reset();
     this.popups.length = 0;
     this.hints.length = 0;
+    this.scars.length = 0;
+    this.burns.length = 0;
     this.seenKinds.clear();
 
     this.score = 0;
@@ -273,6 +305,7 @@ export class Game {
     this.particles.burst(this.player.x, this.player.y, COL.player, 64, 1.5, this.rng);
     this.particles.ring(this.player.x, this.player.y, COL.player, 300, 0.8, 6);
     this.particles.ring(this.player.x, this.player.y, COL.danger, 190, 0.6, 4);
+    this.addBurn(this.player.x, this.player.y, 64, COL.danger);
 
     this.runs++;
     this.save(RUNS_KEY, this.runs);
@@ -308,6 +341,7 @@ export class Game {
     this.swarm.targetY = view.arenaH * 0.5 + Math.sin(this.clock * 0.31) * 170;
     this.swarm.update(dt);
     this.particles.update(dt);
+    this.stepMarks(dt);
 
     // A ghost strike every few seconds, so the title screen teaches the verb
     // before a single word of instruction is read.
@@ -336,11 +370,18 @@ export class Game {
     for (const h of plan.hits) {
       if (h.blocked || !h.enemy) continue;
       h.enemy.alive = false;
-      this.particles.burst(h.enemy.x, h.enemy.y, ENEMY_COL[h.enemy.kind], 18, 1, this.rng);
-      this.particles.ring(h.enemy.x, h.enemy.y, ENEMY_COL[h.enemy.kind], 78, 0.4, 2.5);
+      const col = ENEMY_COL[h.enemy.kind];
+      this.particles.shatter(
+        h.enemy.x, h.enemy.y, silhouette(h.enemy.kind, h.enemy.r), h.enemy.rot,
+        col, plan.dx * 200, plan.dy * 200, this.rng,
+      );
+      this.particles.burst(h.enemy.x, h.enemy.y, col, 12, 1, this.rng);
+      this.particles.ring(h.enemy.x, h.enemy.y, col, 78, 0.4, 2.5);
+      this.addBurn(h.enemy.x, h.enemy.y, h.enemy.r * 2.1, col);
     }
     this.player.x = plan.x0 + plan.dx * plan.dist;
     this.player.y = plan.y0 + plan.dy * plan.dist;
+    this.addScar(plan.x0, plan.y0, this.player.x, this.player.y);
     this.player.endStrike();
     this.juice.addShake(4);
 
@@ -375,6 +416,7 @@ export class Game {
     this.swarm.update(dt);
     this.particles.update(dt);
     this.stepPopups(dt);
+    this.stepMarks(dt);
     if (this.deadTime > 0.8 && (this.input.takeConfirm() || this.input.takeRelease())) {
       this.start();
     }
@@ -504,6 +546,7 @@ export class Game {
     }
 
     this.stepPopups(dt);
+    this.stepMarks(dt);
     this.particles.update(dt);
     this.audio.setIntensity(this.timeScale, p.speedNorm, this.combo, this.inDanger);
 
@@ -518,6 +561,30 @@ export class Game {
       q.vy *= Math.exp(-3.2 * dt);
       if (q.life <= 0) this.popups.splice(i, 1);
     }
+  }
+
+  /** Fade the floor's memory on sim time, so slow motion preserves it. */
+  private stepMarks(dt: number) {
+    for (let i = this.scars.length - 1; i >= 0; i--) {
+      const s = this.scars[i];
+      s.life -= dt;
+      if (s.life <= 0) this.scars.splice(i, 1);
+    }
+    for (let i = this.burns.length - 1; i >= 0; i--) {
+      const b = this.burns[i];
+      b.life -= dt;
+      if (b.life <= 0) this.burns.splice(i, 1);
+    }
+  }
+
+  private addScar(x0: number, y0: number, x1: number, y1: number) {
+    if (this.scars.length > 12) this.scars.shift();
+    this.scars.push({ x0, y0, x1, y1, life: 2.2, max: 2.2 });
+  }
+
+  private addBurn(x: number, y: number, r: number, col: RGB) {
+    if (this.burns.length > 26) this.burns.shift();
+    this.burns.push({ x, y, r, col, life: 8, max: 8 });
   }
 
   private pushPopup(
@@ -600,13 +667,17 @@ export class Game {
 
     const power = e.kind === 'spine' ? 1.5 : e.kind === 'mote' ? 0.9 : 1.2;
     const ang = Math.atan2(dy, dx);
-    this.particles.burst(e.x, e.y, col, Math.round(20 * power) + 12, power, this.rng);
+    // The body breaks into its own edges first — *that* shape died, in its own
+    // colour — and the generic debris underneath is thinned to make room.
+    this.particles.shatter(e.x, e.y, silhouette(e.kind, e.r), e.rot, col, dx * 240, dy * 240, this.rng);
+    this.particles.burst(e.x, e.y, col, Math.round(13 * power) + 8, power, this.rng);
     this.particles.ring(e.x, e.y, col, 96 * power, 0.42, 3.4);
     this.particles.ring(e.x, e.y, COL.playerCore, 46 * power, 0.24, 2.2);
     this.particles.plate(e.x, e.y, ang, COL.playerCore, 150 * power);
     // Spall thrown along the strike axis: debris should look like it was
     // knocked off by something travelling through, not like a firework.
     this.particles.spall(e.x, e.y, ang, col, 10, this.rng);
+    this.addBurn(e.x, e.y, e.r * 2.1, col);
     this.pushPopup(e.x, e.y - e.r - 12, `+${gain}`, '', 'score', col, 0.72);
 
     // Hitstop shrinks as a chain grows: the first kill should land like a
@@ -662,6 +733,8 @@ export class Game {
     const p = this.player;
     const plan = p.plan;
     const n = p.strikeKills;
+
+    if (plan) this.addScar(plan.x0, plan.y0, p.x, p.y);
 
     if (plan && plan.hitWall && !plan.blocked) {
       this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, COL.wall, 12, this.rng);
@@ -726,6 +799,7 @@ export class Game {
     this.particles.burst(p.x, p.y, COL.danger, 26, 1.2, this.rng);
     this.particles.ring(p.x, p.y, COL.danger, 150, 0.5, 5);
     this.particles.ring(p.x, p.y, col, 92, 0.4, 3);
+    this.addBurn(p.x, p.y, 34, COL.danger);
     this.pushPopup(p.x, p.y - 46, `-1 HULL`, '', 'bad', COL.danger, 1.05);
     this.audio.onHurt(p.hull);
   }

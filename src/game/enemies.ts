@@ -67,6 +67,41 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
   },
 };
 
+/**
+ * The body outline of each species, unrotated, in its own local space.
+ *
+ * One source of truth shared by the renderer (which strokes it) and the death
+ * effect (which breaks it apart edge by edge). If these ever diverged, an enemy
+ * would visibly shatter into pieces of a shape it never was.
+ */
+export function silhouette(kind: EnemyKind, r: number): [number, number][] {
+  switch (kind) {
+    case 'mote':
+      return [[0, -r], [r * 0.62, 0], [0, r], [-r * 0.62, 0]];
+    case 'seeder':
+      return [[-r, -r], [r, -r], [r, r], [-r, r]];
+    case 'ward': {
+      const pts: [number, number][] = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * TAU;
+        pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+      }
+      return pts;
+    }
+    case 'lancer':
+      return [[r * 1.4, 0], [-r * 0.8, -r * 0.95], [-r * 0.4, 0], [-r * 0.8, r * 0.95]];
+    case 'spine': {
+      const pts: [number, number][] = [];
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * TAU;
+        const rr = i % 2 === 0 ? r : r * 0.56;
+        pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      }
+      return pts;
+    }
+  }
+}
+
 /** Half-width of a ward's shield arc, radians. */
 export const WARD_ARC = 1.16;
 /** How fast that shield can swing toward you. Slower than you can flank. */

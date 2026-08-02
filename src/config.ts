@@ -91,33 +91,43 @@ export const MULTI_NAMES = [
 /**
  * A tight palette, authored as [r,g,b] so everything can be alpha-blended and
  * additively composited without string parsing in the hot loop.
+ *
+ * The rule that holds it together: **you are the only cold light in a warm,
+ * hostile room.** Everything player-side — ship, strike, focus, hull — is ice.
+ * Every enemy sits in one warm family, ember through violet. The environment
+ * is near-monochrome graphite so the actors own all of the saturation. One
+ * glance at any frame answers the only question that matters: cold kills warm.
+ *
+ * (Earlier drafts had a cyan mote — the most common enemy wearing the player's
+ * own colour — and a green seeder that belonged to nothing. If a colour cannot
+ * say whose side it is on, it does not get to be saturated.)
  */
 export type RGB = readonly [number, number, number];
 
 export const COL = {
-  void: [4, 5, 12] as RGB,
-  floor: [10, 13, 28] as RGB,
-  grid: [42, 62, 116] as RGB,
-  gridHot: [88, 132, 226] as RGB,
-  wall: [96, 150, 255] as RGB,
+  void: [6, 7, 11] as RGB,
+  floor: [13, 15, 22] as RGB,
+  grid: [42, 52, 76] as RGB,
+  gridHot: [86, 118, 172] as RGB,
+  wall: [132, 158, 198] as RGB,
 
-  player: [140, 236, 255] as RGB,
-  playerCore: [255, 255, 255] as RGB,
-  strike: [178, 246, 255] as RGB,
+  player: [126, 230, 255] as RGB,
+  playerCore: [244, 251, 255] as RGB,
+  strike: [156, 240, 255] as RGB,
 
-  focus: [96, 224, 255] as RGB,
-  hull: [120, 255, 190] as RGB,
-  danger: [255, 76, 96] as RGB,
-  warn: [255, 186, 64] as RGB,
+  focus: [96, 214, 250] as RGB,
+  hull: [122, 240, 198] as RGB,
+  danger: [255, 74, 92] as RGB,
+  warn: [255, 178, 74] as RGB,
 
-  mote: [92, 226, 255] as RGB,
-  ward: [232, 104, 255] as RGB,
-  lancer: [255, 146, 62] as RGB,
-  seeder: [150, 255, 122] as RGB,
-  spine: [255, 232, 128] as RGB,
+  mote: [255, 154, 92] as RGB,
+  seeder: [255, 108, 176] as RGB,
+  ward: [186, 126, 255] as RGB,
+  lancer: [255, 86, 64] as RGB,
+  spine: [255, 208, 96] as RGB,
 
-  ink: [226, 238, 255] as RGB,
-  dim: [126, 146, 190] as RGB,
+  ink: [232, 240, 250] as RGB,
+  dim: [124, 138, 164] as RGB,
 } as const;
 
 export const rgba = (c: RGB, a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;

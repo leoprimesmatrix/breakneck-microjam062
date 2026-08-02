@@ -441,12 +441,16 @@ function drawHints(ctx: CanvasRenderingContext2D, game: Game, cx: number, bottom
   ctx.restore();
 }
 
-/** Simplified enemy silhouettes for cards and the legend. */
+/**
+ * Simplified enemy silhouettes for cards and the legend, matching the in-game
+ * body language: a solid dark hull, a lit rim, and the white glint of the
+ * player's light. The card and the thing on the field must be the same animal.
+ */
 export function drawEnemyIcon(ctx: CanvasRenderingContext2D, kind: string, clock: number) {
   const col = ENEMY_COL[kind as keyof typeof ENEMY_COL] ?? COL.ink;
   const r = 15;
   ctx.strokeStyle = rgba(col, 1);
-  ctx.fillStyle = rgba(col, 0.18);
+  ctx.fillStyle = `rgba(${(col[0] * 0.14 + 11) | 0},${(col[1] * 0.14 + 11) | 0},${(col[2] * 0.14 + 14) | 0},1)`;
   ctx.lineWidth = 2.2;
   ctx.save();
 
@@ -478,6 +482,7 @@ export function drawEnemyIcon(ctx: CanvasRenderingContext2D, kind: string, clock
       shape(ctx, [[r * 1.3, 0], [-r * 0.75, -r * 0.9], [-r * 0.35, 0], [-r * 0.75, r * 0.9]]);
       break;
     case 'spine': {
+      ctx.save();
       ctx.rotate(clock * 0.4);
       const pts: [number, number][] = [];
       for (let i = 0; i < 12; i++) {
@@ -486,10 +491,21 @@ export function drawEnemyIcon(ctx: CanvasRenderingContext2D, kind: string, clock
         pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
       }
       shape(ctx, pts);
+      ctx.restore();
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.moveTo(r * 0.3, 0);
+      ctx.lineTo(r * 1.2, 0);
+      ctx.stroke();
       break;
     }
   }
   ctx.restore();
+  // The glint: even in a card, it is watching.
+  ctx.fillStyle = rgba(COL.playerCore, 0.9);
+  ctx.beginPath();
+  ctx.arc(r * 0.34, 0, 2.2, 0, TAU);
+  ctx.fill();
 }
 
 function shape(ctx: CanvasRenderingContext2D, pts: [number, number][]) {

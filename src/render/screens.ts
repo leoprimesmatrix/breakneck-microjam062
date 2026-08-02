@@ -75,47 +75,89 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   }
   ctx.restore();
 
-  drawVec(ctx, word, cx, wy, {
-    size,
-    weight: 0.108,
-    tracking: 0.2,
-    align: 'center',
-    baseline: 'mid',
-    color: rgba(COL.ink, 1),
-    glow: 1.8,
-    glowColor: rgba(COL.strike, 1),
-    slant: 0.1,
-    progress: stage(t, 0.1, 1.1),
-  });
+  // Two tones, one word: AFTER in the player's cold ink, BURN in heat. The
+  // split is the entire fiction in nine letters — cold machine, hot exhaust —
+  // and one committed branding decision does more to make a mark look designed
+  // than any amount of glow.
+  const track = 0.2;
+  const x0 = cx - w * 0.5;
+  const w1 = vecWidth('AFTER', { size, tracking: track });
+  const drawMark = (hot: boolean) => {
+    drawVec(ctx, 'AFTER', x0, wy, {
+      size,
+      weight: 0.108,
+      tracking: track,
+      baseline: 'mid',
+      color: hot ? rgba(COL.playerCore, 0.85) : rgba(COL.ink, 1),
+      glow: hot ? 2 : 1.7,
+      glowColor: rgba(COL.strike, 1),
+      slant: 0.1,
+      progress: hot ? 1 : stage(t, 0.1, 0.85),
+    });
+    drawVec(ctx, 'BURN', x0 + w1 + track * size, wy, {
+      size,
+      weight: 0.108,
+      tracking: track,
+      baseline: 'mid',
+      color: hot ? rgba(COL.playerCore, 0.85) : rgba(COL.warn, 1),
+      glow: hot ? 2 : 1.7,
+      glowColor: hot ? rgba(COL.strike, 1) : rgba(COL.warn, 1),
+      slant: 0.1,
+      progress: hot ? 1 : stage(t, 0.5, 0.85),
+    });
+  };
+  drawMark(false);
 
   // A highlight sweep that crosses the mark every few seconds.
   const sweep = (game.clock * 0.22) % 1;
-  if (sweep < 0.36) {
+  if (sweep < 0.36 && t > 1.6) {
     const sx = cx - w * 0.6 + (sweep / 0.36) * w * 1.2;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.beginPath();
     ctx.rect(sx - 26 * S, wy - size, 52 * S, size * 2);
     ctx.clip();
-    drawVec(ctx, word, cx, wy, {
-      size,
-      weight: 0.108,
-      tracking: 0.2,
-      align: 'center',
-      baseline: 'mid',
-      color: rgba(COL.playerCore, 0.85),
-      glow: 2,
-      glowColor: rgba(COL.strike, 1),
-      slant: 0.1,
-    });
+    drawMark(true);
     ctx.restore();
   }
 
-  // --- rule + tagline
+  // --- rule + tagline. The rule parts around the ship's own chevron — the
+  //     emblem sits in the break like a maker's mark set into an engraved line.
   const ruleY = wy + size * 0.68;
   const ruleP = stage(t, 0.55, 0.6);
+  const half = w * 0.5 * ruleP;
+  const gapW = 24 * S;
   ctx.fillStyle = rgba(COL.wall, 0.45 * ruleP);
-  ctx.fillRect(cx - w * 0.5 * ruleP, ruleY, w * ruleP, 1.5 * S);
+  if (half > gapW) {
+    ctx.fillRect(cx - half, ruleY, half - gapW, 1.5 * S);
+    ctx.fillRect(cx + gapW, ruleY, half - gapW, 1.5 * S);
+  }
+  if (ruleP > 0.3) {
+    ctx.save();
+    ctx.globalAlpha = ruleP;
+    ctx.translate(cx, ruleY + 0.75 * S);
+    const es = 1.05 * S;
+    ctx.scale(es, es);
+    ctx.fillStyle = rgba(COL.playerCore, 0.95);
+    ctx.strokeStyle = rgba(COL.player, 0.9);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(11, 0);
+    ctx.lineTo(-7, -7);
+    ctx.lineTo(-3.5, 0);
+    ctx.lineTo(-7, 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Its own little strike line, trailing off to the left of the break.
+    ctx.strokeStyle = rgba(COL.strike, 0.55);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-19, 0);
+    ctx.lineTo(-10, 0);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   const tagY = ruleY + 30 * S;
   ctx.save();
@@ -227,6 +269,20 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
     );
     ctx.restore();
   }
+
+  // --- jam plate. Small print grounds a title screen in a real occasion the
+  //     way a colophon grounds a book; its job is to be almost unnoticed.
+  ctx.save();
+  ctx.globalAlpha = stage(t, 2.0, 0.7) * 0.55;
+  drawUI(ctx, 'MICRO JAM 062  ·  THEME: SPEED', cx, view.h - 16 * S, {
+    size: 9.5 * S,
+    weight: 600,
+    tracking: 2.6 * S,
+    align: 'center',
+    color: rgba(COL.dim, 1),
+    maxWidth: view.w * 0.9,
+  });
+  ctx.restore();
 
   // --- records
   if (game.best > 0) {

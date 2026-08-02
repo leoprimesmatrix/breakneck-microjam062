@@ -1,7 +1,7 @@
 import { COL, PLAYER_R, SPAWN_TELEGRAPH, rgba, type RGB } from '../config';
 import { TAU, clamp, clamp01, easeOutCubic, easeOutQuint } from '../engine/math';
 import { ENEMY_COL, type Game } from '../game/game';
-import { ORB_R, WARD_ARC, type Enemy } from '../game/enemies';
+import { ORB_R, WARD_ARC, silhouette, type Enemy, type EnemyKind } from '../game/enemies';
 import type { StrikePlan } from '../game/strike';
 import { view } from '../viewport';
 import { drawRadial, radialSprite } from './glow';
@@ -36,6 +36,61 @@ const glowSprite = (col: RGB, inner: number) =>
     [0, rgba(col, inner)],
     [1, rgba(col, 0)],
   ]);
+
+/** Soft dark stain for scorch marks — the one sprite here that darkens. */
+const scorchSprite = () =>
+  radialSprite('scorch', [
+    [0, 'rgba(0,0,0,0.85)'],
+    [0.55, 'rgba(0,0,0,0.42)'],
+    [1, 'rgba(0,0,0,0)'],
+  ]);
+
+/**
+ * Unit-radius body outlines, shared with the death effect via `silhouette` —
+ * built once so the per-frame path never allocates. Bodies are drawn by scaling
+ * the context, with the line width compensated back to screen weight.
+ */
+const UNIT: Record<EnemyKind, [number, number][]> = {
+  mote: silhouette('mote', 1),
+  seeder: silhouette('seeder', 1),
+  ward: silhouette('ward', 1),
+  lancer: silhouette('lancer', 1),
+  spine: silhouette('spine', 1),
+};
+
+/**
+ * A body's own colour pulled down to hull-plate dark. Enemies are *objects* —
+ * they occlude the grid — and it is precisely this opacity that makes them read
+ * as things standing in the player's light rather than icons printed on it.
+ */
+const darkBody = (col: RGB) =>
+  `rgba(${(col[0] * 0.14 + 11) | 0},${(col[1] * 0.14 + 11) | 0},${(col[2] * 0.14 + 14) | 0},1)`;
+
+function unitPoly(
+  ctx: CanvasRenderingContext2D,
+  pts: [number, number][],
+  s: number,
+  fill: string | null,
+  stroke: string | null,
+  lw: number,
+) {
+  ctx.save();
+  ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lw / s;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   drawBackdrop(ctx, game);
@@ -106,6 +161,113 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
 }
 
 // --------------------------------------------------------------------- floor
+/** One path for the whole grid; drawn twice (base + inside the light pool). */
+function gridPath(ctx: CanvasRenderingContext2D, step: number) {
+  const { arenaW, arenaH } = view;
+  ctx.beginPath();
+  for (let x = step; x < arenaW; x += step) {
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, arenaH);
+  }
+  for (let y = step; y < arenaH; y += step) {
+    ctx.moveTo(0, y);
+    ctx.lineTo(arenaW, y);
+  }
+}
+
+/**
+ * Markings painted on the floor, like a court or a test range: a centre circle,
+ * registration crosses, an arena ID. Pure set dressing — but it is exactly this
+ * kind of purposeless-looking purpose that makes a space feel surveyed and
+ * built rather than generated. Drawn once per frame, five cheap strokes.
+ */
+function drawEtchings(ctx: CanvasRenderingContext2D) {
+  const { arenaW, arenaH } = view;
+  const cx = arenaW * 0.5;
+  const cy = arenaH * 0.5;
+
+  ctx.save();
+  ctx.strokeStyle = rgba(COL.wall, 0.1);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 104, 0, TAU);
+  ctx.stroke();
+  ctx.beginPath();
+  // Quadrant ticks just outside the circle, and a small centre cross.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * TAU;
+    ctx.moveTo(cx + Math.cos(a) * 104, cy + Math.sin(a) * 104);
+    ctx.lineTo(cx + Math.cos(a) * 118, cy + Math.sin(a) * 118);
+  }
+  ctx.moveTo(cx - 8, cy);
+  ctx.lineTo(cx + 8, cy);
+  ctx.moveTo(cx, cy - 8);
+  ctx.lineTo(cx, cy + 8);
+  // Registration crosses inset at the corners.
+  for (const [rx, ry] of [
+    [120, 120], [arenaW - 120, 120], [arenaW - 120, arenaH - 120], [120, arenaH - 120],
+  ] as const) {
+    ctx.moveTo(rx - 7, ry);
+    ctx.lineTo(rx + 7, ry);
+    ctx.moveTo(rx, ry - 7);
+    ctx.lineTo(rx, ry + 7);
+  }
+  ctx.stroke();
+
+  drawVec(ctx, 'ARENA 062', arenaW - 20, arenaH - 16, {
+    size: 11,
+    weight: 0.14,
+    tracking: 0.3,
+    align: 'right',
+    color: rgba(COL.wall, 0.2),
+  });
+  drawVec(ctx, 'AFB RECORDER LIVE', 20, arenaH - 16, {
+    size: 11,
+    weight: 0.14,
+    tracking: 0.3,
+    color: rgba(COL.wall, 0.13),
+  });
+  ctx.restore();
+}
+
+/** Scorch stains where things died, with a brief dying ember at their heart. */
+function drawBurns(ctx: CanvasRenderingContext2D, game: Game) {
+  if (!game.burns.length) return;
+  const scorch = scorchSprite();
+  for (const b of game.burns) {
+    const t = b.life / b.max;
+    // The stain holds most of its life, then lets go.
+    drawRadial(ctx, scorch, b.x, b.y, b.r, 0.55 * Math.min(1, t * 2.2));
+  }
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const b of game.burns) {
+    const age = 1 - b.life / b.max;
+    const ember = clamp01(1 - age / 0.16);
+    if (ember <= 0.01) continue;
+    drawRadial(ctx, glowSprite(b.col, 0.45), b.x, b.y, b.r * 0.7, ember * ember);
+  }
+  ctx.restore();
+}
+
+/** The lines of recent strikes, burned into the floor and cooling. */
+function drawScars(ctx: CanvasRenderingContext2D, game: Game) {
+  if (!game.scars.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  for (const s of game.scars) {
+    const t = s.life / s.max;
+    ctx.strokeStyle = rgba(COL.strike, 0.1 * t * t);
+    ctx.lineWidth = 7;
+    line(ctx, s.x0, s.y0, s.x1, s.y1);
+    ctx.strokeStyle = rgba(COL.playerCore, 0.2 * t * t * t);
+    ctx.lineWidth = 1.6;
+    line(ctx, s.x0, s.y0, s.x1, s.y1);
+  }
+  ctx.restore();
+}
+
 function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   const { arenaW, arenaH } = view;
   const p = game.player;
@@ -114,19 +276,18 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.fillStyle = rgba(COL.floor, 1);
   ctx.fillRect(0, 0, arenaW, arenaH);
 
-  // Base grid.
-  ctx.strokeStyle = rgba(COL.grid, 0.3);
+  // Base grid, minor and major. The 4-cell major rhythm is most of what stops
+  // the floor reading as procedurally tiled wallpaper.
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = GRID; x < arenaW; x += GRID) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, arenaH);
-  }
-  for (let y = GRID; y < arenaH; y += GRID) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(arenaW, y);
-  }
+  ctx.strokeStyle = rgba(COL.grid, 0.22);
+  gridPath(ctx, GRID);
   ctx.stroke();
+  ctx.strokeStyle = rgba(COL.grid, 0.42);
+  gridPath(ctx, GRID * 4);
+  ctx.stroke();
+
+  drawEtchings(ctx);
+  drawBurns(ctx, game);
 
   // The player carries a light. Re-drawing the grid clipped to a disc around the
   // ship is far cheaper than a per-line gradient and reads as a real pool.
@@ -136,19 +297,13 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.arc(p.x, p.y, lightR, 0, TAU);
   ctx.clip();
   drawRadial(ctx, glowSprite(COL.gridHot, 0.16), p.x, p.y, lightR);
-  ctx.strokeStyle = rgba(COL.gridHot, 0.34);
+  ctx.strokeStyle = rgba(COL.gridHot, 0.3);
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = GRID; x < arenaW; x += GRID) {
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, arenaH);
-  }
-  for (let y = GRID; y < arenaH; y += GRID) {
-    ctx.moveTo(0, y);
-    ctx.lineTo(arenaW, y);
-  }
+  gridPath(ctx, GRID);
   ctx.stroke();
   ctx.restore();
+
+  drawScars(ctx, game);
 
   // Aim mode dims the floor so the strike line is the brightest thing on it.
   if (game.aimBlend > 0.01) {
@@ -251,10 +406,25 @@ function drawEnemies(ctx: CanvasRenderingContext2D, game: Game) {
   }
 }
 
+/**
+ * A small white glint offset toward the player: every species catches the one
+ * cold light in the room. The cheapest possible way to make a shape read as a
+ * *creature aware of you* rather than a marker — and because the light source
+ * is the player, it is diegetic rather than decoration.
+ */
+function glint(ctx: CanvasRenderingContext2D, toP: number, off: number, alpha: number) {
+  ctx.fillStyle = rgba(COL.playerCore, 0.88 * alpha);
+  ctx.beginPath();
+  ctx.arc(Math.cos(toP) * off, Math.sin(toP) * off, 2.6, 0, TAU);
+  ctx.fill();
+}
+
 function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alpha: number) {
   const col = ENEMY_COL[e.kind];
   const flash = clamp01(e.flash);
   const breathe = 1 + Math.sin(game.clock * 3 + e.seed) * 0.05;
+  const toP = Math.atan2(game.player.y - e.y, game.player.x - e.x);
+  const body = darkBody(col);
 
   ctx.save();
   ctx.translate(e.x, e.y);
@@ -265,43 +435,42 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
   drawRadial(ctx, haloSprite(col), 0, 0, e.r * 2.5, alpha);
   ctx.globalCompositeOperation = 'source-over';
 
-  ctx.lineWidth = 2.4;
-  ctx.strokeStyle = rgba(col, alpha);
-  ctx.fillStyle = rgba(col, 0.14 * alpha);
-
   switch (e.kind) {
     case 'mote': {
+      // An ember: it flickers, because embers are never steady.
+      const fl = 0.8 + 0.2 * Math.sin(game.clock * 11 + e.seed * 5.3);
+      ctx.save();
       ctx.rotate(e.rot);
-      const r = e.r * breathe;
-      poly(ctx, [
-        [0, -r], [r * 0.62, 0], [0, r], [-r * 0.62, 0],
-      ], true, true);
-      ctx.fillStyle = rgba(COL.playerCore, 0.85 * alpha);
-      ctx.beginPath();
-      ctx.arc(0, 0, r * 0.2, 0, TAU);
-      ctx.fill();
+      const s = e.r * breathe;
+      unitPoly(ctx, UNIT.mote, s, body, rgba(col, alpha * fl), 2.2);
+      // A hot seam down the long axis, like a coal about to split.
+      ctx.strokeStyle = rgba(col, 0.85 * alpha * fl);
+      ctx.lineWidth = 1.2;
+      line(ctx, 0, -s * 0.5, 0, s * 0.5);
+      ctx.restore();
+      glint(ctx, toP, e.r * 0.32, alpha);
       break;
     }
 
     case 'seeder': {
-      ctx.rotate(e.rot * 0.4);
-      const r = e.r * breathe;
-      poly(ctx, [[-r, -r], [r, -r], [r, r], [-r, r]], true, true);
       ctx.save();
-      ctx.rotate(-e.rot * 1.6);
-      ctx.strokeStyle = rgba(col, 0.6 * alpha);
-      ctx.lineWidth = 1.6;
-      poly(ctx, [[-r * 0.5, -r * 0.5], [r * 0.5, -r * 0.5], [r * 0.5, r * 0.5], [-r * 0.5, r * 0.5]], true, false);
+      ctx.rotate(e.rot * 0.4);
+      const s = e.r * breathe;
+      unitPoly(ctx, UNIT.seeder, s, body, rgba(col, 0.95 * alpha), 2.2);
+      // The womb: an inner chamber counter-rotating against the hull.
+      ctx.rotate(-e.rot * 2);
+      unitPoly(ctx, UNIT.seeder, s * 0.5, null, rgba(col, 0.55 * alpha), 1.5);
       ctx.restore();
       // Three orbiting pips — the three motes it is about to become. The enemy
-      // states its own death rule on its body.
-      ctx.fillStyle = rgba(COL.playerCore, 0.9 * alpha);
+      // states its own death rule on its body, in the motes' own ember colour.
+      ctx.fillStyle = rgba(COL.mote, 0.95 * alpha);
       for (let i = 0; i < 3; i++) {
         const a = e.age * 2 + (i / 3) * TAU;
         ctx.beginPath();
-        ctx.arc(Math.cos(a) * r * 1.5, Math.sin(a) * r * 1.5, 2.6, 0, TAU);
+        ctx.arc(Math.cos(a) * e.r * 1.5, Math.sin(a) * e.r * 1.5, 2.6, 0, TAU);
         ctx.fill();
       }
+      glint(ctx, toP, e.r * 0.4, alpha);
       break;
     }
 
@@ -309,7 +478,17 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       const r = e.r * breathe;
       ctx.save();
       ctx.rotate(e.rot);
-      poly(ctx, hexPoints(r), true, true);
+      unitPoly(ctx, UNIT.ward, r, body, rgba(col, 0.95 * alpha), 2.2);
+      // Facet seams, so the hex reads as an armoured lantern rather than a tile.
+      ctx.strokeStyle = rgba(col, 0.3 * alpha);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI;
+        ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+        ctx.lineTo(-Math.cos(a) * r, -Math.sin(a) * r);
+      }
+      ctx.stroke();
       ctx.restore();
 
       // The shield. Deliberately the brightest thing on the enemy: it is the
@@ -337,6 +516,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       }
       ctx.stroke();
       ctx.globalCompositeOperation = 'source-over';
+      glint(ctx, toP, r * 0.34, alpha);
       break;
     }
 
@@ -355,11 +535,22 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
         ctx.fill();
         ctx.globalCompositeOperation = 'source-over';
       }
-      ctx.fillStyle = rgba(col, (e.state === 1 ? 0.4 : 0.16) * alpha);
-      poly(ctx, [[r * 1.4, 0], [-r * 0.8, -r * 0.95], [-r * 0.4, 0], [-r * 0.8, r * 0.95]], true, true);
-      ctx.fillStyle = rgba(COL.playerCore, 0.9 * alpha);
+      // While marking, the whole body strobes — a weapon spinning up.
+      const arm = e.state === 1 ? 0.75 + 0.25 * Math.sin(game.clock * 22) : 1;
+      unitPoly(ctx, UNIT.lancer, r, body, rgba(col, arm * alpha), 2.2);
+      // Engine ember at the tail; flares hard in the charge.
+      ctx.globalCompositeOperation = 'lighter';
+      drawRadial(
+        ctx, glowSprite(col, 0.55), -r * 0.75, 0,
+        r * (charging ? 1.15 : 0.5 + 0.1 * Math.sin(game.clock * 9 + e.seed)),
+        alpha,
+      );
+      ctx.globalCompositeOperation = 'source-over';
+      // The headlight sits on its nose: a lancer looks where it will charge,
+      // which is the one thing worth knowing about it.
+      ctx.fillStyle = rgba(COL.playerCore, 0.92 * alpha);
       ctx.beginPath();
-      ctx.arc(r * 0.3, 0, 2.6, 0, TAU);
+      ctx.arc(r * 0.55, 0, 2.6, 0, TAU);
       ctx.fill();
       break;
     }
@@ -368,21 +559,23 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       const r = e.r * breathe;
       ctx.save();
       ctx.rotate(e.rot);
-      const spikes: [number, number][] = [];
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * TAU;
-        const rr = i % 2 === 0 ? r : r * 0.56;
-        spikes.push([Math.cos(a) * rr, Math.sin(a) * rr]);
-      }
-      poly(ctx, spikes, true, true);
+      unitPoly(ctx, UNIT.spine, r, body, rgba(col, 0.95 * alpha), 2.2);
       ctx.restore();
+      // The barrel tracks you. Muzzle glint doubles as the eye.
+      ctx.strokeStyle = rgba(col, 0.9 * alpha);
+      ctx.lineWidth = 3;
+      line(ctx, Math.cos(toP) * r * 0.3, Math.sin(toP) * r * 0.3, Math.cos(toP) * r * 1.28, Math.sin(toP) * r * 1.28);
+      ctx.fillStyle = rgba(COL.playerCore, 0.92 * alpha);
+      ctx.beginPath();
+      ctx.arc(Math.cos(toP) * r * 1.28, Math.sin(toP) * r * 1.28, 2.4, 0, TAU);
+      ctx.fill();
       // Charge ring: how close the next orb is.
       const t = 1 - clamp01(e.timer / 2.3);
       ctx.globalCompositeOperation = 'lighter';
       ctx.strokeStyle = rgba(col, 0.75 * alpha);
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(0, 0, r * 1.42, -Math.PI / 2, -Math.PI / 2 + TAU * t);
+      ctx.arc(0, 0, r * 1.5, -Math.PI / 2, -Math.PI / 2 + TAU * t);
       ctx.stroke();
       ctx.globalCompositeOperation = 'source-over';
       break;
@@ -390,15 +583,6 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
   }
 
   ctx.restore();
-}
-
-function hexPoints(r: number): [number, number][] {
-  const pts: [number, number][] = [];
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * TAU;
-    pts.push([Math.cos(a) * r, Math.sin(a) * r]);
-  }
-  return pts;
 }
 
 function poly(
@@ -421,6 +605,11 @@ function drawOrbs(ctx: CanvasRenderingContext2D, game: Game) {
     if (!o.alive) continue;
     const pulse = 1 + Math.sin(o.age * 9) * 0.12;
     ctx.globalCompositeOperation = 'lighter';
+    // Tracer tail along the velocity: a shot, not a floating decoration.
+    ctx.strokeStyle = rgba(COL.spine, 0.3);
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    line(ctx, o.x - o.vx * 0.055, o.y - o.vy * 0.055, o.x, o.y);
     drawRadial(ctx, glowSprite(COL.spine, 0.42), o.x, o.y, ORB_R * 3);
     ctx.globalCompositeOperation = 'source-over';
 
@@ -473,6 +662,20 @@ function drawAim(ctx: CanvasRenderingContext2D, game: Game, plan: StrikePlan) {
   ctx.strokeStyle = rgba(COL.strike, 0.5 * focusA);
   ctx.lineWidth = 2.4;
   line(ctx, plan.x0, plan.y0, ex, ey);
+
+  // Graduations. The line is an instrument reading, and instruments are ruled.
+  const gx = -plan.dy;
+  const gy = plan.dx;
+  ctx.strokeStyle = rgba(COL.strike, 0.32 * focusA);
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  for (let d = 80; d < plan.dist - 24; d += 80) {
+    const tx = plan.x0 + plan.dx * d;
+    const ty = plan.y0 + plan.dy * d;
+    ctx.moveTo(tx - gx * 6, ty - gy * 6);
+    ctx.lineTo(tx + gx * 6, ty + gy * 6);
+  }
+  ctx.stroke();
 
   // Flowing dashes: the line should look like it is already moving.
   ctx.setLineDash([26, 20]);
@@ -669,15 +872,36 @@ function drawPlayer(ctx: CanvasRenderingContext2D, game: Game) {
   }
   ctx.globalCompositeOperation = 'source-over';
 
+  // Engine light trailing off the stern, flaring with real speed. The ship
+  // must never look parked: even a drift is a machine under thrust.
+  const thrust = Math.min(1, p.speed / 760);
+  if (!striking && thrust > 0.03) {
+    ctx.globalCompositeOperation = 'lighter';
+    drawRadial(ctx, glowSprite(COL.strike, 0.5), -PLAYER_R * 1.05, 0, PLAYER_R * (0.7 + thrust * 1.5), alpha * (0.35 + thrust * 0.65));
+    ctx.fillStyle = rgba(COL.playerCore, (0.3 + thrust * 0.6) * alpha);
+    ctx.fillRect(-PLAYER_R * (1.1 + thrust * 0.9), -1.1, PLAYER_R * 0.7, 2.2);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
   // Hull: a chevron that stretches into a lance while striking.
   const sx = 1 + p.stretch * 2.3;
   const sy = 1 - p.stretch * 0.42;
   ctx.scale(sx, sy);
   const r = PLAYER_R;
-  ctx.fillStyle = rgba(COL.player, 0.22 * alpha);
+  ctx.fillStyle = rgba(COL.player, 0.26 * alpha);
   ctx.strokeStyle = rgba(COL.player, alpha);
   ctx.lineWidth = 2.6 / Math.max(sx, 1) + 0.6;
   poly(ctx, [[r * 1.5, 0], [-r * 0.9, -r], [-r * 0.45, 0], [-r * 0.9, r]], true, true);
+
+  // Cockpit vee echoing the hull line — one stroke of interior detail is the
+  // difference between a glyph and a vehicle.
+  ctx.strokeStyle = rgba(COL.playerCore, 0.55 * alpha);
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.2, -r * 0.5);
+  ctx.lineTo(r * 0.7, 0);
+  ctx.lineTo(-r * 0.2, r * 0.5);
+  ctx.stroke();
 
   ctx.fillStyle = rgba(COL.playerCore, alpha);
   ctx.beginPath();
@@ -687,6 +911,13 @@ function drawPlayer(ctx: CanvasRenderingContext2D, game: Game) {
 }
 
 // --------------------------------------------------------------------- frame
+/**
+ * The arena's bezel, drawn like the housing of an instrument rather than a
+ * border: a hairline pair for depth, a graduation of tick marks aligned to the
+ * floor grid, and heavier corner hardware. The tick rhythm is doing the real
+ * work — a plain rectangle says "canvas element", a ruled one says "machine
+ * that was built to measure what happens inside it".
+ */
 function drawFrame(ctx: CanvasRenderingContext2D, game: Game) {
   const { arenaW, arenaH } = view;
   const pulse = game.alarm;
@@ -694,14 +925,39 @@ function drawFrame(ctx: CanvasRenderingContext2D, game: Game) {
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  for (const [w, a] of [[14, 0.045], [6, 0.09], [2, 0.34]] as const) {
-    ctx.lineWidth = w;
-    ctx.strokeStyle = rgba(base, a * (1 + pulse * 0.9));
-    ctx.strokeRect(0, 0, arenaW, arenaH);
-  }
 
-  // Corner brackets — a small, cheap detail that makes the field read as a
-  // deliberate piece of equipment rather than a rectangle.
+  // Depth: soft bloom, crisp inner line, faint offset outer line.
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = rgba(base, 0.04 * (1 + pulse * 0.9));
+  ctx.strokeRect(0, 0, arenaW, arenaH);
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = rgba(base, 0.5 * (1 + pulse * 0.5));
+  ctx.strokeRect(0, 0, arenaW, arenaH);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = rgba(base, 0.16);
+  ctx.strokeRect(-6, -6, arenaW + 12, arenaH + 12);
+
+  // Graduations, aligned to the grid; every fourth is a major.
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = rgba(base, 0.38);
+  ctx.beginPath();
+  for (let x = GRID; x < arenaW; x += GRID) {
+    const len = (x / GRID) % 4 === 0 ? 9 : 4;
+    ctx.moveTo(x, -3);
+    ctx.lineTo(x, -3 - len);
+    ctx.moveTo(x, arenaH + 3);
+    ctx.lineTo(x, arenaH + 3 + len);
+  }
+  for (let y = GRID; y < arenaH; y += GRID) {
+    const len = (y / GRID) % 4 === 0 ? 9 : 4;
+    ctx.moveTo(-3, y);
+    ctx.lineTo(-3 - len, y);
+    ctx.moveTo(arenaW + 3, y);
+    ctx.lineTo(arenaW + 3 + len, y);
+  }
+  ctx.stroke();
+
+  // Corner hardware: bracket plus a filled stud.
   const L = 46;
   ctx.lineWidth = 3.4;
   ctx.strokeStyle = rgba(base, 0.8);
@@ -714,6 +970,12 @@ function drawFrame(ctx: CanvasRenderingContext2D, game: Game) {
     ctx.lineTo(cx, cy + dy * L);
   }
   ctx.stroke();
+  ctx.fillStyle = rgba(base, 0.9);
+  for (const [cx, cy] of [
+    [0, 0], [arenaW, 0], [arenaW, arenaH], [0, arenaH],
+  ] as const) {
+    ctx.fillRect(cx - 2.4, cy - 2.4, 4.8, 4.8);
+  }
   ctx.restore();
 }
 
