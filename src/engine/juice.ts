@@ -11,6 +11,12 @@ export class Juice {
   flash = 0;
   /** Seconds of slow motion remaining. */
   slowmo = 0;
+  /**
+   * Instantaneous camera zoom kick, as a fraction. Shake moves the frame;
+   * punch moves the *lens*, which is what makes an impact feel like it happened
+   * to the viewer rather than to the scenery.
+   */
+  punch = 0;
 
   private shakeSeed = Math.random() * 1000;
   private t = 0;
@@ -20,6 +26,7 @@ export class Juice {
     this.shake = 0;
     this.flash = 0;
     this.slowmo = 0;
+    this.punch = 0;
   }
 
   addHitstop(seconds: number) {
@@ -38,6 +45,10 @@ export class Juice {
     if (seconds > this.slowmo) this.slowmo = seconds;
   }
 
+  addPunch(amount: number) {
+    if (amount > this.punch) this.punch = amount;
+  }
+
   /** Multiplier applied to sim dt. */
   get timeScale() {
     return this.slowmo > 0 ? 0.3 : 1;
@@ -54,6 +65,9 @@ export class Juice {
     // 2-3 frame punctuation mark, never a tint the art has to live underneath.
     this.flash *= Math.exp(-26 * dtReal);
     if (this.flash < 0.004) this.flash = 0;
+    // Punch springs back faster than shake so the two read as separate events.
+    this.punch *= Math.exp(-14 * dtReal);
+    if (this.punch < 0.0005) this.punch = 0;
   }
 
   /** Consume frozen time; returns true if the sim should be skipped this step. */

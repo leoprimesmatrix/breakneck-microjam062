@@ -29,6 +29,7 @@ export class Audio {
   private speedNorm = 0;
   private muted = false;
   private running = false;
+  private odActive = false;
 
   /** Sequencer state. */
   private nextNoteTime = 0;
@@ -229,6 +230,104 @@ export class Audio {
     osc.stop(when + 0.08);
   }
 
+  setOverdrive(on: boolean) {
+    this.odActive = on;
+  }
+
+  /**
+   * Overdrive stinger: a fifth stacked on the root, swept upward under a noise
+   * whoosh. Loud, short, unmistakable — the audio has to confirm the state
+   * change before the player has finished reading the word on screen.
+   */
+  onOverdrive() {
+    if (!this.enabled) return;
+    const ctx = this.ctx!;
+    const when = ctx.currentTime;
+
+    for (const [mult, type, peak] of [
+      [1, 'sawtooth', 0.2],
+      [1.5, 'sawtooth', 0.15],
+      [2, 'square', 0.1],
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.setValueAtTime(ROOT_HZ * mult, when);
+      osc.frequency.exponentialRampToValueAtTime(ROOT_HZ * mult * 4, when + 0.42);
+      const g = this.env(osc, peak, 0.008, 0.5, when);
+      g.connect(this.sfxBus);
+      osc.start(when);
+      osc.stop(when + 0.6);
+    }
+    this.noiseBurst(when, 0.3, 0.45, 2600, 'highpass');
+  }
+
+  onOverdriveEnd() {
+    if (!this.enabled) return;
+    const ctx = this.ctx!;
+    const when = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(ROOT_HZ * 3, when);
+    osc.frequency.exponentialRampToValueAtTime(ROOT_HZ * 0.75, when + 0.34);
+    const g = this.env(osc, 0.13, 0.006, 0.36, when);
+    g.connect(this.sfxBus);
+    osc.start(when);
+    osc.stop(when + 0.45);
+  }
+
+  /** Zone arrival: an open fifth, high and clean, over a soft noise swell. */
+  onZone() {
+    if (!this.enabled) return;
+    const ctx = this.ctx!;
+    const when = ctx.currentTime;
+    for (const [deg, delay] of [[0, 0], [7, 0.07], [12, 0.14]] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = semitone(deg + 36);
+      const g = this.env(osc, 0.11, 0.01, 0.55, when + delay);
+      g.connect(this.sfxBus);
+      osc.start(when + delay);
+      osc.stop(when + delay + 0.7);
+    }
+    this.noiseBurst(when, 0.07, 0.5, 3400, 'highpass');
+  }
+
+  /**
+   * Tier climbed. A tiny rising blip whose pitch tracks the new tier, so the
+   * ear learns the ladder even before the eye finds the badge. Down-shifts stay
+   * silent — losing speed already has bounce/brake feedback, and a sad blip on
+   * every marginal break would read as being punished for playing well.
+   */
+  onPowerUp(tier: number) {
+    if (!this.enabled || !this.running) return;
+    const ctx = this.ctx!;
+    const when = ctx.currentTime;
+    const f = 480 + tier * 85;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(f * 0.8, when);
+    osc.frequency.exponentialRampToValueAtTime(f, when + 0.05);
+    const g = this.env(osc, 0.05, 0.004, 0.09, when);
+    g.connect(this.sfxBus);
+    osc.start(when);
+    osc.stop(when + 0.16);
+  }
+
+  onHeal() {
+    if (!this.enabled || !this.running) return;
+    const ctx = this.ctx!;
+    const when = ctx.currentTime;
+    for (const [deg, delay] of [[0, 0], [7, 0.06]] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = semitone(deg + 24);
+      const g = this.env(osc, 0.14, 0.005, 0.22, when + delay);
+      g.connect(this.sfxBus);
+      osc.start(when + delay);
+      osc.stop(when + delay + 0.3);
+    }
+  }
+
   onDeath() {
     if (!this.enabled) return;
     const ctx = this.ctx!;
@@ -255,8 +354,10 @@ export class Audio {
     if (!this.enabled || !this.running) return;
     const ctx = this.ctx!;
 
-    // Tempo rides velocity — the score accelerates because you do.
-    const bpm = 96 + this.speedNorm * 84;
+    // Tempo rides velocity — the score accelerates because you do. Overdrive
+    // shifts the whole sequencer up a gear so the payoff is audible, not just
+    // a louder version of the same groove.
+    const bpm = (96 + this.speedNorm * 84) * (this.odActive ? 1.34 : 1);
     const stepDur = 60 / bpm / 2; // eighth notes
 
     const horizon = ctx.currentTime + 0.12;
@@ -304,7 +405,7 @@ export class Audio {
     }
 
     // Layer 3 — arpeggio, only at genuinely high speed.
-    if (n > 0.62) {
+    if (n > 0.62 || this.odActive) {
       const deg = PENTATONIC[step % PENTATONIC.length];
       const osc = ctx.createOscillator();
       osc.type = 'square';
@@ -313,6 +414,26 @@ export class Audio {
       g.connect(this.musicBus);
       osc.start(when);
       osc.stop(when + 0.14);
+    }
+
+    // Layer 4 — overdrive only: an octave-up lead doubling the arpeggio, plus a
+    // hat on the off-beat. Exists purely so the payoff sounds like a different
+    // piece of music rather than the same one with the gain up.
+    if (this.odActive) {
+      const deg = PENTATONIC[(step * 2) % PENTATONIC.length];
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.value = semitone(deg + 36);
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.value = 2600;
+      osc.connect(filt);
+      const g = this.env(filt, 0.05, 0.004, 0.08, when);
+      g.connect(this.musicBus);
+      osc.start(when);
+      osc.stop(when + 0.13);
+
+      if (step % 2 === 1) this.noiseBurst(when, 0.035, 0.04, 7000, 'highpass');
     }
   }
 }

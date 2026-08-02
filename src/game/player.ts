@@ -13,6 +13,7 @@ import {
   LAT_MAX_SLOW,
   MAX_HEALTH,
   MAX_TIER,
+  OD_GRAVITY_BONUS,
   PLAYER_R,
   V_BOUNCE_CAP,
   V_MAX,
@@ -36,6 +37,9 @@ export class Player {
   /** Set for one step when a wall was struck, so the renderer can react. */
   hitWall = false;
 
+  /** Mirrors Overdrive.active; the sim reads it, the renderer reads it. */
+  overdriven = false;
+
   reset() {
     this.x = VIEW_W / 2;
     this.y = 0;
@@ -45,6 +49,16 @@ export class Player {
     this.health = MAX_HEALTH;
     this.iframe = 0;
     this.hitWall = false;
+    this.overdriven = false;
+  }
+
+  /**
+   * -1..1 lean from lateral velocity. Purely for the renderer, but a hull that
+   * banks into its turn is the difference between piloting something and
+   * sliding a shape around.
+   */
+  get bank() {
+    return clamp(this.vx / LAT_MAX_SLOW, -1, 1);
   }
 
   get kmh() {
@@ -79,8 +93,11 @@ export class Player {
     this.drag = damp(this.drag, targetDrag, DRAG_SHIFT_RATE, dt);
 
     // Drag always opposes motion, including on the upward half of a bounce.
+    // Overdrive adds pull rather than removing drag, so the acceleration is felt
+    // as a shove in the back instead of the physics quietly changing rules.
     const dragAccel = this.drag * this.vy * Math.abs(this.vy);
-    this.vy += (GRAVITY - dragAccel) * dt;
+    const g = GRAVITY + (this.overdriven ? OD_GRAVITY_BONUS : 0);
+    this.vy += (g - dragAccel) * dt;
     this.vy = clamp(this.vy, V_BOUNCE_CAP, V_MAX);
 
     // --- lateral, with authority falling off as speed rises
