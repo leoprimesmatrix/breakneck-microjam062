@@ -18,6 +18,9 @@ import {
 } from '../config';
 import { clamp, lerp } from '../engine/math';
 
+/** Heat gain multiplier once past the redline — thermal runaway. */
+const RUNAWAY_MULT = 1.7;
+
 /**
  * Heat: the whole game, in one number.
  *
@@ -126,9 +129,21 @@ export class Heat {
     return toughness * (1 - headroom);
   }
 
-  /** Score multiplier. Riding the redline IS the scoring strategy. */
+  /**
+   * Score multiplier. Rewards being HOT — and deliberately stops rewarding you
+   * for being ON FIRE.
+   *
+   * The multiplier used to run all the way to full heat, which quietly made
+   * "never vent" the scoring strategy: the redline paid more *and* venting costs
+   * depth, so careful play was punished twice and a bot holding one key
+   * outscored one managing its temperature three to one. Capping the curve at
+   * the redline means the top band is worth almost exactly what the hot band is,
+   * and overheating becomes a tactical choice about meltdown — invulnerability
+   * and CORE walls — rather than a scoring one.
+   */
   get mult() {
-    const base = lerp(HEAT_MULT_COLD, HEAT_MULT_HOT, this.value);
+    const t = Math.min(this.value, HEAT_REDLINE) / HEAT_REDLINE;
+    const base = lerp(HEAT_MULT_COLD, HEAT_MULT_HOT, t);
     return this.melting ? base * MELTDOWN_MULT : base;
   }
 
@@ -176,7 +191,15 @@ export class Heat {
 
     // Quadratic in speed: heating scales with the square of velocity, same shape
     // as the drag that produces it.
-    const gain = speedNorm * speedNorm * HEAT_GAIN;
+    //
+    // Past the redline it runs away. Without this the last stretch to a meltdown
+    // took ~2s of continuous burn, cost about two hull pips, and simply killed
+    // the player first — the payoff at the top of the curve was content that
+    // never fired. Runaway makes crossing the redline a commitment: from there
+    // you are going to melt down unless you vent hard, and venting still wins if
+    // you choose it.
+    const runaway = this.value >= HEAT_REDLINE ? RUNAWAY_MULT : 1;
+    const gain = speedNorm * speedNorm * HEAT_GAIN * runaway;
     const vent = HEAT_VENT * (braking ? BRAKE_VENT_MULT : 1);
     this.value = clamp(this.value + (gain - vent) * dt, 0, 1);
 

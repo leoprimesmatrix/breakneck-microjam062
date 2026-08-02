@@ -33,6 +33,8 @@ export class Player {
 
   /** Mirrors Heat.melting; the sim reads it, the renderer reads it. */
   melting = false;
+  /** Mirrors Heat.value. Steering authority reads it — see `step`. */
+  heat = 0;
 
   reset() {
     this.x = midX();
@@ -81,11 +83,21 @@ export class Player {
     this.vy += (g - dragAccel) * dt;
     this.vy = clamp(this.vy, V_BOUNCE_CAP, V_MAX);
 
-    // --- lateral, with authority falling off as speed rises.
+    // --- lateral, with authority falling off as speed AND heat rise.
+    //
     // Authored in lanes/sec and converted here: the field is 7 lanes wide on a
-    // phone and 26 on a monitor, and what must stay constant is how quickly you
+    // phone and 14 on a monitor, and what must stay constant is how quickly you
     // reach the NEXT lane, because dodging is always a local decision.
-    const k = smoothstep(this.speedNorm);
+    //
+    // Heat entering this term is what finally made the temperature a real
+    // trade-off. With hull damage as the only cost of running hot, maximum heat
+    // was still strictly optimal — speed is progress, progress is score, and a
+    // finite pool of hull is a cheap price for a continuous advantage. Costing
+    // CONTROL instead means the redline cannot aim: you melt everything except
+    // the one material that stops you, and you can no longer steer around it.
+    // The playable optimum lands in the middle of the gauge, which is where the
+    // interesting decisions are.
+    const k = smoothstep(Math.max(this.speedNorm, this.heat));
     const latAccel = lanesToPx(lerp(LAT_ACCEL_LANES_SLOW, LAT_ACCEL_LANES_FAST, k));
     const latMax = lanesToPx(lerp(LAT_LANES_SLOW, LAT_LANES_FAST, k));
 

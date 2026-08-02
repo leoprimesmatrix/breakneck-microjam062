@@ -101,11 +101,11 @@ export const HEAT_REDLINE = 0.82;
  * meltdown takes ~2s of diving, so at these rates a meltdown costs roughly one
  * hull pip — it is bought, not found.
  */
-export const REDLINE_DPS_MIN = 0.6;
-export const REDLINE_DPS_MAX = 1.3;
+export const REDLINE_DPS_MIN = 1.1;
+export const REDLINE_DPS_MAX = 2.4;
 
 /** Meltdown: heat hits 1.0. Melts anything, cannot be hurt. */
-export const MELTDOWN_TIME = 4;
+export const MELTDOWN_TIME = 3.2;
 /**
  * Heat left when a meltdown ends — just below the redline, NOT zero.
  *
@@ -115,7 +115,7 @@ export const MELTDOWN_TIME = 4;
  * decision — dive back through the redline for another one, or vent and cool —
  * lands immediately and repeatedly.
  */
-export const MELTDOWN_END_HEAT = 0.68;
+export const MELTDOWN_END_HEAT = 0.45;
 /** Extra downward pull during meltdown — you accelerate through it. */
 export const MELTDOWN_GRAVITY = 520;
 

@@ -246,6 +246,7 @@ export class Game {
     // --- heat, and the burn it costs
     const burn = this.heat.update(dt, p.speedNorm, this.input.brake);
     p.melting = this.heat.melting;
+    p.heat = this.heat.value;
     this.peakHeat = Math.max(this.peakHeat, this.heat.value);
 
     if (this.heat.justMelted) this.onMeltdown();

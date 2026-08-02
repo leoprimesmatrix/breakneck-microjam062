@@ -123,11 +123,12 @@ export class World {
    */
   private roll(metres: number, bias = 0): Material {
     const t = this.toughnessAt(metres);
-    // CORE frequency is what forces steering to exist at all. At 16% a player
-    // sitting on high heat could plough almost everything and simply eat the
-    // occasional bounce; at 28% there is a cold obstacle in most rows, so a
-    // line has to be chosen even when hot.
-    if (bias >= 0 && this.rng() < lerp(0, 0.28, t)) return CORE;
+    // CORE frequency is what forces steering to exist at all — it is the only
+    // material a hot player still has to go around. Tuned between two failures:
+    // at 16% a high-heat player ploughed nearly everything and never steered; at
+    // 28% cold walls arrived faster than the reaction window at terminal
+    // velocity and runs ended on collisions before heat could ever matter.
+    if (bias >= 0 && this.rng() < lerp(0, 0.24, t)) return CORE;
     const max = clamp(Math.round(lerp(0, 2, t)) + bias, 0, 2);
     const min = clamp(Math.round(lerp(0, 1, t)) + bias, 0, max);
     return randInt(this.rng, min, max) as Material;
