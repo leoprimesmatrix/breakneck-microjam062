@@ -6,10 +6,11 @@ import {
   rgba,
   type RGB,
 } from '../config';
-import { TAU, clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine/math';
-import { SPECS, silhouette, type EnemyKind } from '../game/enemies';
+import { clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine/math';
+import { SPECS, type EnemyKind } from '../game/enemies';
 import { ENEMY_COL, pad, type Game } from '../game/game';
 import { view } from '../viewport';
+import { drawEnemyPortrait } from './bodies';
 import { active } from './glow';
 import { IS_TOUCH, drawUI, drawVec, uiWidth, vecWidth } from './text';
 
@@ -446,104 +447,14 @@ function drawHints(ctx: CanvasRenderingContext2D, game: Game, cx: number, bottom
 /**
  * Enemy portraits for the rule cards and the pause codex.
  *
- * Drawn from the same `silhouette` data the field bodies and the shatter use,
- * with the same dark hull, lit rim and white glint. A codex that showed a
- * tidied-up version of each enemy would be worse than no codex: the player is
- * consulting it precisely to match a picture against something that just killed
- * them, and it has to be the same animal.
+ * This used to be a second, hand-tidied drawing of each species maintained here
+ * by eye, which is exactly the wrong thing for a picture whose only job is to be
+ * matched against something that just killed the player. It now defers to the
+ * same five functions the arena uses, posed rather than redrawn, so the card and
+ * the thing on the floor cannot drift apart.
  */
 export function drawEnemyIcon(ctx: CanvasRenderingContext2D, kind: string, clock: number) {
-  const col = ENEMY_COL[kind as keyof typeof ENEMY_COL] ?? COL.ink;
-  const r = 14;
-  const pts = silhouette(kind as EnemyKind, r);
-  // The card's light comes from the right, so the rim sits where the reader's
-  // eye already is — and matches the glint below it.
-  const spin =
-    kind === 'mote' ? clock * 1.2
-    : kind === 'seeder' ? clock * 0.5
-    : kind === 'lancer' ? Math.sin(clock * 0.8) * 0.5
-    : kind === 'spine' ? clock * 0.4
-    : clock * 0.25;
-
-  ctx.save();
-  ctx.rotate(spin);
-  ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.closePath();
-  ctx.fillStyle = `rgba(${(col[0] * 0.14 + 11) | 0},${(col[1] * 0.14 + 11) | 0},${(col[2] * 0.14 + 14) | 0},1)`;
-  ctx.fill();
-  ctx.strokeStyle = rgba(col, 0.95);
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.restore();
-
-  // The one identifying part of each body, carried over from `bodies.ts`. A
-  // codex entry has to be matched against something that just killed the player,
-  // so the tell they saw in the arena — the ward's plate gaps, the spine's
-  // muzzle brake, the mote's molten core — has to be on the card too.
-  if (kind === 'mote') {
-    ctx.strokeStyle = rgba(col, 0.9);
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    for (const a of [-1.7, 0.3, 2.4]) {
-      ctx.moveTo(1, -1);
-      ctx.lineTo(Math.cos(a) * r * 0.8 + 1, Math.sin(a) * r * 0.8 - 1);
-    }
-    ctx.stroke();
-    ctx.fillStyle = rgba(col, 0.85);
-    ctx.beginPath();
-    ctx.arc(1, -1, r * 0.3, 0, TAU);
-    ctx.fill();
-  }
-  if (kind === 'seeder') {
-    ctx.fillStyle = rgba(COL.mote, 0.95);
-    for (let i = 0; i < 3; i++) {
-      const a = clock * 2 + (i / 3) * TAU;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * r * 0.4, Math.sin(a) * r * 0.4, 2, 0, TAU);
-      ctx.fill();
-    }
-  }
-  if (kind === 'ward') {
-    const face = Math.sin(clock) * 0.6;
-    for (let i = 0; i < 3; i++) {
-      const a0 = face - 0.95 + i * 0.63 + 0.07;
-      ctx.strokeStyle = rgba(col, 1);
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(0, 0, r * 1.38, a0, a0 + 0.5);
-      ctx.stroke();
-    }
-    ctx.fillStyle = rgba(col, 0.95);
-    for (const s of [-1, 1] as const) {
-      ctx.beginPath();
-      ctx.arc(Math.cos(face + s * 0.95) * r * 1.38, Math.sin(face + s * 0.95) * r * 1.38, 2.4, 0, TAU);
-      ctx.fill();
-    }
-  }
-  if (kind === 'spine') {
-    ctx.strokeStyle = rgba(col, 0.9);
-    ctx.lineWidth = 2.6;
-    ctx.beginPath();
-    ctx.moveTo(r * 0.3, 0);
-    ctx.lineTo(r * 1.3, 0);
-    ctx.stroke();
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (const d of [1.0, 1.22] as const) {
-      ctx.moveTo(r * d, -r * 0.2);
-      ctx.lineTo(r * d, r * 0.2);
-    }
-    ctx.stroke();
-  }
-
-  // The glint: even in a card, it is watching.
-  ctx.fillStyle = rgba(COL.playerCore, 0.9);
-  ctx.beginPath();
-  ctx.arc(r * 0.34, 0, 2.2, 0, TAU);
-  ctx.fill();
+  drawEnemyPortrait(ctx, kind as EnemyKind, 13, clock);
 }
 
 // ----------------------------------------------------------------- wave card

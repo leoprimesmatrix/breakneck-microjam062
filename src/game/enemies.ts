@@ -83,77 +83,90 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
  * housing — and the shatter inherits all of it for free.
  */
 /**
- * Silhouette is the whole identity.
+ * Silhouette is the whole identity, and identity means *a thing you have seen
+ * before*.
  *
- * The previous set were all convex lumps of roughly one size, and they read
- * exactly as that: five small objects in five colours. Nothing in the outline
- * said *what any of them was*. What separates recognisable shapes is not vertex
- * count or interior detail — it is **aspect ratio and things that stick out**.
- * A blob with a spike is a different animal from a blob; two blobs are the same
- * animal twice.
+ * Two rewrites of these went by before the real problem surfaced. The first set
+ * were five convex lumps in five colours; the second set fixed the aspect ratios
+ * and hung fittings off them, which was necessary but not sufficient, because
+ * the shapes still did not depict anything. "Burning shrapnel", "a pod in a
+ * cradle", "an armoured prow" are descriptions of a *mood*, and a mood has no
+ * outline. Asked what any of them was, a player could only answer "a small
+ * object", which is exactly what they said.
  *
- * So the five below are deliberately spread across the whole range a shape can
- * occupy: a jagged star, a tall ovoid, a squat pentagon that hides behind its
- * own shield, a long needle, and a wide bolted drum. Each one is also drawn with
- * appendages that break its convex hull — clamp arms, holder struts, splayed
- * legs, a gun barrel — and those are in `bodies.ts` because the shatter should
- * break the *body*, not the fittings.
+ * So every one of these is now a real object that a person can name on sight,
+ * chosen so that its everyday meaning happens to be its game rule:
+ *
+ *  - MOTE   — a **naval mine**. Round body, blunt horns, one fuze eye. Everyone
+ *             on earth knows a mine drifts at you and kills you if you touch it,
+ *             which is the entire behaviour, learned for free.
+ *  - SEEDER — a **brood pod**, split-seamed, with three mines visibly loaded
+ *             inside it. You can see what it will spill before it spills it.
+ *  - WARD   — a **shield bearer**: one big eye behind a plated barricade held
+ *             out on struts, with daylight between the two.
+ *  - LANCER — a **missile**: long nose, two swept deltas, an engine. It points.
+ *  - SPINE  — a **turret**: a drum bolted to the floor with one heavy barrel.
+ *
+ * A cue the previous drafts had backwards, worth stating once: the horns, the
+ * spikes and the wing tips must stay *short relative to the body*. Long even
+ * spikes make a star, and a star reads as something you collect.
  */
 export function silhouette(kind: EnemyKind, r: number): [number, number][] {
   switch (kind) {
-    // Shrapnel that is still burning: five spikes of five different lengths with
-    // deep notches between them. Nothing else on the field has a concave outline,
-    // which is exactly why this one is identifiable at any size.
-    case 'mote':
-      // Spike lengths run 1.30, 1.04, 0.90, 0.76, 1.11 — the spread is the whole
-      // point. Five *even* spikes is a star, and a star reads as a pickup; five
-      // uneven ones read as something that was broken off something else.
-      return [
-        [0, -r * 1.3], [r * 0.4, -r * 0.42], [r * 1.02, -r * 0.18], [r * 0.42, r * 0.26],
-        [r * 0.56, r * 0.7], [-r * 0.02, r * 0.4], [-r * 0.38, r * 0.66],
-        // One long straight run down the left flank: the face it was broken off
-        // along. Without it the outline is a five-pointed star, and a star reads
-        // as something you collect.
-        [-r * 0.86, r * 0.3], [-r * 1.08, -r * 0.28], [-r * 0.36, -r * 0.46],
-      ];
-    // A tall sealed ovoid — the only shape here that is noticeably taller than it
-    // is wide, and the only one with no straight edge at all. It is an egg, and
-    // it should be read as an egg before any of the detail resolves.
+    // A mine: a round body carrying six horns. Two proportions decide whether
+    // this reads as a mine or as a star, and neither is obvious. The horns have
+    // to be **narrow** — a wide-based spike is a star point — and the core has to
+    // stay **round**, which needs a vertex in the middle of every gap, or six
+    // chords turn it into a hexagon and the horns become its corners.
+    case 'mote': {
+      const pts: [number, number][] = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * TAU;
+        pts.push([Math.cos(a - 0.17) * r * 0.62, Math.sin(a - 0.17) * r * 0.62]);
+        pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+        pts.push([Math.cos(a + 0.17) * r * 0.62, Math.sin(a + 0.17) * r * 0.62]);
+        pts.push([Math.cos(a + 0.52) * r * 0.67, Math.sin(a + 0.52) * r * 0.67]);
+      }
+      return pts;
+    }
+    // A tall sealed ovoid — the only shape here noticeably taller than it is wide,
+    // and the only one with no straight edge at all. It is an egg, and it should
+    // be read as an egg before any of the detail resolves.
     case 'seeder':
       return [
         [0, -r * 1.12], [r * 0.52, -r * 0.86], [r * 0.72, -r * 0.24], [r * 0.66, r * 0.42],
         [r * 0.34, r * 0.98], [0, r * 1.16], [-r * 0.34, r * 0.98], [-r * 0.66, r * 0.42],
         [-r * 0.72, -r * 0.24], [-r * 0.52, -r * 0.86],
       ];
-    // Small and compact on purpose. The ward's silhouette is mostly *shield*, and
-    // the body has to be visibly smaller than the slab it hides behind or the
-    // whole read — a thing cowering behind a wall — collapses.
+    // Compact and rounded on purpose: a head, not a hull. The ward's silhouette
+    // is mostly *shield*, and the body has to be visibly smaller than the slab it
+    // hides behind or the read — something cowering behind a wall — collapses.
     case 'ward':
       return [
-        [r * 0.78, -r * 0.3], [r * 0.42, -r * 0.76], [-r * 0.3, -r * 0.8],
-        [-r * 0.76, -r * 0.22], [-r * 0.6, r * 0.52], [r * 0.08, r * 0.78],
-        [r * 0.7, r * 0.36],
+        [r * 0.84, -r * 0.26], [r * 0.5, -r * 0.72], [-r * 0.14, -r * 0.86],
+        [-r * 0.72, -r * 0.5], [-r * 0.86, r * 0.12], [-r * 0.5, r * 0.7],
+        [r * 0.14, r * 0.84], [r * 0.72, r * 0.44],
       ];
-    // A dart: twice as long as it is wide, with canards up front and raked fins
-    // at the tail. The one enemy whose outline states a heading, which is the one
-    // thing that matters about it. Kept *broad* through the middle — the first
-    // draft was a true needle and at this size a needle is a scribble.
+    // A missile. Long nose, two big swept deltas, a blunt tail — and nothing
+    // else. The previous draft had canards, tail fins and seventeen vertices, and
+    // at forty pixels all seventeen collapsed into one blob with flaps; the read
+    // came back the moment the small features were deleted rather than tuned.
     case 'lancer':
       return [
-        [r * 1.65, 0], [r * 0.95, -r * 0.2], [r * 0.62, -r * 0.56], [r * 0.36, -r * 0.26],
-        [-r * 0.4, -r * 0.38], [-r * 0.86, -r * 0.98], [-r * 1.12, -r * 0.82],
-        [-r * 0.8, -r * 0.3], [-r * 1.2, -r * 0.18], [-r * 1.2, r * 0.18],
-        [-r * 0.8, r * 0.3], [-r * 1.12, r * 0.82], [-r * 0.86, r * 0.98],
-        [-r * 0.4, r * 0.38], [r * 0.36, r * 0.26], [r * 0.62, r * 0.56], [r * 0.95, r * 0.2],
+        [r * 1.75, 0], [r * 0.7, -r * 0.28], [r * 0.05, -r * 0.36],
+        [-r * 0.7, -r * 1.06], [-r * 1.08, -r * 0.92], [-r * 0.58, -r * 0.34],
+        [-r * 1.1, -r * 0.24], [-r * 1.1, r * 0.24], [-r * 0.58, r * 0.34],
+        [-r * 1.08, r * 0.92], [-r * 0.7, r * 1.06], [r * 0.05, r * 0.36],
+        [r * 0.7, r * 0.28],
       ];
     // A wide, squat drum: heavy, flat-sided, and shorter than it is broad. It is
     // the only body that reads as *installed* rather than as flying, which is the
     // whole point of the species.
     case 'spine': {
       const pts: [number, number][] = [];
-      for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * TAU + Math.PI / 10;
-        pts.push([Math.cos(a) * r * 1.06, Math.sin(a) * r * 0.82]);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * TAU + Math.PI / 8;
+        pts.push([Math.cos(a) * r * 1.08, Math.sin(a) * r * 0.84]);
       }
       return pts;
     }
