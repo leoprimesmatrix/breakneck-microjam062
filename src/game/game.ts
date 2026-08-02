@@ -58,13 +58,18 @@ const BEST_KEY = 'afterburn.best.v1';
 const WAVE_KEY = 'afterburn.wave.v1';
 const RUNS_KEY = 'afterburn.runs.v1';
 
+/**
+ * Thresholds calibrated against instrumented runs: a competent run dies around
+ * wave 10 for ~70k, and the wave-clear bonus scales with the wave number, so
+ * the curve has to be superlinear or every long run collapses into one grade.
+ */
 const RANKS: { min: number; label: string; note: string }[] = [
-  { min: 120000, label: 'SS', note: 'Nothing survives the line.' },
-  { min: 62000, label: 'S', note: 'Surgical.' },
-  { min: 30000, label: 'A', note: 'Reading the whole board.' },
-  { min: 14000, label: 'B', note: 'Getting dangerous.' },
+  { min: 180000, label: 'SS', note: 'Nothing survives the line.' },
+  { min: 85000, label: 'S', note: 'Surgical.' },
+  { min: 38000, label: 'A', note: 'Reading the whole board.' },
+  { min: 15000, label: 'B', note: 'Getting dangerous.' },
   { min: 5000, label: 'C', note: 'Finding the rhythm.' },
-  { min: 0, label: 'D', note: 'Hold longer. Aim through.' },
+  { min: 0, label: 'D', note: 'Hold longer. Aim through more.' },
 ];
 
 export const ENEMY_COL: Record<EnemyKind, RGB> = {
