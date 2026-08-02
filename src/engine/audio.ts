@@ -1,98 +1,99 @@
+import type { EnemyKind } from '../game/enemies';
+
 /**
  * Fully procedural WebAudio. No asset files, no licensing, no load time.
  *
- * Two ideas carry the whole soundtrack:
- *  - break SFX walk *up* a minor-pentatonic scale as the chain grows, so a long
- *    combo plays as a rising melodic run. That ascending line is the hook.
- *  - the music's tempo is driven by your actual velocity, so the score literally
- *    accelerates with you. Speed is the instrument.
+ * The one idea worth knowing: when the player holds to aim, the *music* enters
+ * bullet time with them — the sequencer halves its tempo, every voice drops a
+ * clean octave, and a low-pass closes over the whole bus. Because the notes are
+ * synthesised rather than sampled, that transposition stays perfectly in key, so
+ * slow motion sounds like the track shifting gear rather than like a tape being
+ * dragged. That single effect does more for the feel of the mechanic than any
+ * amount of on-screen vignette.
  */
 
-// Minor pentatonic: every interval is consonant with every other, so notes can
-// fire in any order at any density and never sound wrong.
-const PENTATONIC = [0, 3, 5, 7, 10];
-const ROOT_HZ = 110; // A2
+const MINOR = [0, 2, 3, 5, 7, 8, 10];
+const PENTA = [0, 3, 5, 7, 10];
+/** i - VI - VII - v, one chord per bar. */
+const PROGRESSION = [0, -4, -2, 7];
+const ROOT = 55; // A1
 
-const semitone = (n: number) => ROOT_HZ * Math.pow(2, n / 12);
+const hz = (semis: number) => ROOT * Math.pow(2, semis / 12);
+
+const KIND_WAVE: Record<EnemyKind, OscillatorType> = {
+  mote: 'triangle',
+  seeder: 'sine',
+  ward: 'square',
+  lancer: 'sawtooth',
+  spine: 'square',
+};
 
 export class Audio {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
-  private sfxBus!: GainNode;
-  private musicBus!: GainNode;
+  private sfx!: GainNode;
+  private music!: GainNode;
+  private musicFilter!: BiquadFilterNode;
+  private noise!: AudioBuffer;
 
-  private windGain!: GainNode;
-  private windFilter!: BiquadFilterNode;
-
-  private noiseBuffer!: AudioBuffer;
-
-  private speedNorm = 0;
-  private muted = false;
-  private running = false;
-  private melting = false;
-  private heat = 0;
-  private redlining = false;
-  /** Continuous redline alarm — created lazily, held for the burn's duration. */
-  private alarmOsc: OscillatorNode | null = null;
+  private droneGain: GainNode | null = null;
   private alarmGain: GainNode | null = null;
 
-  /** Sequencer state. */
-  private nextNoteTime = 0;
+  private muted = false;
+  private running = false;
+  private dilation = 1;
+  private combo = 1;
+  private danger = false;
+
+  private nextTime = 0;
   private step = 0;
 
   get enabled() {
     return this.ctx !== null && !this.muted;
   }
 
-  /**
-   * Must be called from a user gesture — browsers start every AudioContext
-   * suspended. Safe to call repeatedly.
-   */
+  get isMuted() {
+    return this.muted;
+  }
+
+  /** Must be called from a user gesture; safe to call repeatedly. */
   ensure() {
     if (this.ctx) {
       if (this.ctx.state === 'suspended') void this.ctx.resume();
       return;
     }
     try {
-      const Ctor = window.AudioContext || (window as never as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const Ctor =
+        window.AudioContext ||
+        (window as never as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const ctx = new Ctor();
       this.ctx = ctx;
 
       this.master = ctx.createGain();
-      this.master.gain.value = this.muted ? 0 : 0.9;
+      this.master.gain.value = this.muted ? 0 : 0.85;
       this.master.connect(ctx.destination);
 
-      this.sfxBus = ctx.createGain();
-      this.sfxBus.gain.value = 0.85;
-      this.sfxBus.connect(this.master);
+      this.sfx = ctx.createGain();
+      this.sfx.gain.value = 0.9;
+      this.sfx.connect(this.master);
 
-      this.musicBus = ctx.createGain();
-      this.musicBus.gain.value = 0.0;
-      this.musicBus.connect(this.master);
+      this.musicFilter = ctx.createBiquadFilter();
+      this.musicFilter.type = 'lowpass';
+      this.musicFilter.frequency.value = 6000;
+      this.musicFilter.Q.value = 0.6;
 
-      // --- wind: filtered noise whose brightness and level track velocity
+      this.music = ctx.createGain();
+      this.music.gain.value = 0;
+      this.music.connect(this.musicFilter).connect(this.master);
+
       const len = Math.floor(ctx.sampleRate * 2);
       const buf = ctx.createBuffer(1, len, ctx.sampleRate);
       const data = buf.getChannelData(0);
       for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      this.noiseBuffer = buf;
+      this.noise = buf;
 
-      const wind = ctx.createBufferSource();
-      wind.buffer = buf;
-      wind.loop = true;
-
-      this.windFilter = ctx.createBiquadFilter();
-      this.windFilter.type = 'bandpass';
-      this.windFilter.frequency.value = 400;
-      this.windFilter.Q.value = 0.7;
-
-      this.windGain = ctx.createGain();
-      this.windGain.gain.value = 0;
-
-      wind.connect(this.windFilter).connect(this.windGain).connect(this.master);
-      wind.start();
-
-      this.nextNoteTime = ctx.currentTime;
+      this.startDrone();
+      this.nextTime = ctx.currentTime;
     } catch {
       this.ctx = null; // audio is a bonus, never a hard failure
     }
@@ -100,9 +101,7 @@ export class Audio {
 
   setMuted(v: boolean) {
     this.muted = v;
-    if (this.ctx) {
-      this.master.gain.setTargetAtTime(this.muted ? 0 : 0.9, this.ctx.currentTime, 0.02);
-    }
+    if (this.ctx) this.master.gain.setTargetAtTime(v ? 0 : 0.85, this.ctx.currentTime, 0.03);
     return this.muted;
   }
 
@@ -110,38 +109,39 @@ export class Audio {
     return this.setMuted(!this.muted);
   }
 
-  /** Music only plays during a run. */
   setRunning(on: boolean) {
     this.running = on;
     if (!this.ctx) return;
-    this.musicBus.gain.setTargetAtTime(on ? 0.5 : 0, this.ctx.currentTime, 0.15);
-    if (!on) {
-      this.windGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
-      // The burn alarm must not outlive the run that started it.
-      this.stopAlarm();
-      this.redlining = false;
+    this.music.gain.setTargetAtTime(on ? 0.42 : 0.0, this.ctx.currentTime, 0.2);
+    if (!on) this.setAlarm(false);
+  }
+
+  /**
+   * @param timeScale current simulation time scale — 1 normal, ~0.1 aiming
+   * @param speed     0..1 player speed
+   * @param combo     current multiplier, gates the lead layer
+   * @param danger    one hull left
+   */
+  setIntensity(timeScale: number, speed: number, combo: number, danger: boolean) {
+    this.dilation = timeScale;
+    this.combo = combo;
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const slow = timeScale < 0.45;
+
+    this.musicFilter.frequency.setTargetAtTime(slow ? 620 : 2400 + speed * 4200, t, 0.09);
+    if (this.droneGain) {
+      this.droneGain.gain.setTargetAtTime(slow ? 0.11 : 0.0, t, 0.12);
+    }
+    if (danger !== this.danger) {
+      this.danger = danger;
+      this.setAlarm(danger);
     }
   }
 
-  setSpeed(norm: number) {
-    this.speedNorm = norm;
-    if (!this.ctx || !this.running) return;
-    const t = this.ctx.currentTime;
-    // Wind rises steeply so the top end of the dive feels genuinely dangerous.
-    this.windGain.gain.setTargetAtTime(0.02 + norm * norm * 0.3, t, 0.08);
-    this.windFilter.frequency.setTargetAtTime(300 + norm * 2100, t, 0.08);
-  }
-
-  // ------------------------------------------------------------------ sfx
-  private env(
-    node: AudioNode,
-    peak: number,
-    attack: number,
-    decay: number,
-    when: number,
-  ): GainNode {
-    const ctx = this.ctx!;
-    const g = ctx.createGain();
+  // ------------------------------------------------------------------ voices
+  private env(node: AudioNode, peak: number, attack: number, decay: number, when: number) {
+    const g = this.ctx!.createGain();
     g.gain.setValueAtTime(0.0001, when);
     g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), when + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, when + attack + decay);
@@ -149,345 +149,342 @@ export class Audio {
     return g;
   }
 
-  private noiseBurst(when: number, peak: number, decay: number, freq: number, type: BiquadFilterType = 'bandpass') {
+  private tone(
+    freq: number,
+    type: OscillatorType,
+    peak: number,
+    decay: number,
+    when: number,
+    bend = 1,
+    bus: GainNode = this.sfx,
+  ) {
+    const ctx = this.ctx!;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, when);
+    if (bend !== 1) osc.frequency.exponentialRampToValueAtTime(freq * bend, when + decay);
+    const g = this.env(osc, peak, 0.004, decay, when);
+    g.connect(bus);
+    osc.start(when);
+    osc.stop(when + decay + 0.08);
+  }
+
+  private hiss(
+    when: number,
+    peak: number,
+    decay: number,
+    freq: number,
+    type: BiquadFilterType = 'bandpass',
+    sweepTo = 0,
+  ) {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
-    src.buffer = this.noiseBuffer;
-    src.playbackRate.value = 1 + Math.random() * 0.4;
-
+    src.buffer = this.noise;
+    src.playbackRate.value = 0.8 + Math.random() * 0.5;
     const filt = ctx.createBiquadFilter();
     filt.type = type;
-    filt.frequency.value = freq;
-    filt.Q.value = 1.1;
-
+    filt.frequency.setValueAtTime(freq, when);
+    if (sweepTo) filt.frequency.exponentialRampToValueAtTime(sweepTo, when + decay);
+    filt.Q.value = 1.2;
     src.connect(filt);
-    const g = this.env(filt, peak, 0.002, decay, when);
-    g.connect(this.sfxBus);
+    const g = this.env(filt, peak, 0.003, decay, when);
+    g.connect(this.sfx);
     src.start(when);
-    src.stop(when + decay + 0.05);
+    src.stop(when + decay + 0.1);
   }
 
-  /**
-   * @param chain    current chain length — drives the rising melodic run
-   * @param marginal 0..1 how close the break was to your heat ceiling
-   * @param material 0..3 — tougher material gets a lower, grittier body
-   */
-  onBreak(chain: number, marginal: number, material: number, isGate: boolean) {
-    if (!this.enabled || !this.running) return;
+  private startDrone() {
     const ctx = this.ctx!;
-    const when = ctx.currentTime;
-
-    // Walk up the pentatonic, climbing octaves; cap so it stays in a musical range.
-    const idx = Math.min(chain, 40);
-    const deg = PENTATONIC[idx % PENTATONIC.length];
-    const oct = Math.min(Math.floor(idx / PENTATONIC.length), 4);
-    // Tougher material sits lower — glass tinkles, plate thuds.
-    const freq = semitone(deg + oct * 12 + 24 - material * 3);
-
-    const osc = ctx.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(freq, when);
-    // A touch of downward pitch bend gives it a percussive "chip" rather than a beep.
-    osc.frequency.exponentialRampToValueAtTime(freq * 0.82, when + 0.09);
-
-    const peak = 0.16 + marginal * 0.16;
-    const g = this.env(osc, peak, 0.004, 0.1 + marginal * 0.08, when);
-    g.connect(this.sfxBus);
-    osc.start(when);
-    osc.stop(when + 0.24);
-
-    // Marginal breaks get grit; trivial ones stay clean so plowing feels smooth.
-    // Grit on marginal breaks and on anything heavier than a grate; plain
-    // material stays clean so ploughing glass still feels smooth.
-    if (marginal > 0.45 || isGate || material >= 2) {
-      this.noiseBurst(when, 0.1 + marginal * 0.12, 0.07, 1400 + marginal * 1800);
-    }
-    if (isGate) {
-      const sweep = ctx.createOscillator();
-      sweep.type = 'sawtooth';
-      sweep.frequency.setValueAtTime(freq * 0.5, when);
-      sweep.frequency.exponentialRampToValueAtTime(freq * 2, when + 0.3);
-      const sg = this.env(sweep, 0.14, 0.01, 0.34, when);
-      sg.connect(this.sfxBus);
-      sweep.start(when);
-      sweep.stop(when + 0.4);
-    }
-  }
-
-  onBounce() {
-    if (!this.enabled || !this.running) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(150, when);
-    osc.frequency.exponentialRampToValueAtTime(42, when + 0.22);
-    const g = this.env(osc, 0.3, 0.003, 0.26, when);
-    g.connect(this.sfxBus);
-    osc.start(when);
-    osc.stop(when + 0.34);
-
-    this.noiseBurst(when, 0.26, 0.16, 700, 'lowpass');
-  }
-
-  /**
-   * Heat drives the mix. The redline gets a continuous alarm rather than a
-   * one-shot: the hull is burning for as long as you stay up there, and a
-   * single beep would let the player forget they are on fire.
-   */
-  setHeat(value: number, melting: boolean, redlining: boolean) {
-    this.heat = value;
-    this.melting = melting;
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-
-    if (redlining && !this.redlining) this.startAlarm();
-    else if (!redlining && this.redlining) this.stopAlarm();
-    this.redlining = redlining;
-
-    if (this.alarmOsc && this.alarmGain) {
-      // Pitch and level ride how deep into the redline you are.
-      const over = Math.max(0, (value - 0.82) / 0.18);
-      this.alarmOsc.frequency.setTargetAtTime(320 + over * 190, t, 0.05);
-      this.alarmGain.gain.setTargetAtTime(0.03 + over * 0.05, t, 0.05);
-    }
-  }
-
-  private startAlarm() {
-    if (!this.ctx || this.alarmOsc) return;
-    const ctx = this.ctx;
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.value = 320;
-    // Tremolo via a second oscillator on the gain: a wavering tone reads as an
-    // alarm, a steady one reads as a synth pad.
     const g = ctx.createGain();
-    g.gain.value = 0.0;
-    const lfo = ctx.createOscillator();
-    lfo.type = 'sine';
-    lfo.frequency.value = 7;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 0.5;
-    lfo.connect(lfoGain).connect(g.gain);
-    osc.connect(g).connect(this.sfxBus);
-    osc.start();
-    lfo.start();
-    this.alarmOsc = osc;
-    this.alarmGain = g;
-  }
-
-  private stopAlarm() {
-    if (!this.ctx || !this.alarmOsc || !this.alarmGain) return;
-    const t = this.ctx.currentTime;
-    this.alarmGain.gain.setTargetAtTime(0, t, 0.05);
-    this.alarmOsc.stop(t + 0.3);
-    this.alarmOsc = null;
-    this.alarmGain = null;
-  }
-
-  /**
-   * Overdrive stinger: a fifth stacked on the root, swept upward under a noise
-   * whoosh. Loud, short, unmistakable — the audio has to confirm the state
-   * change before the player has finished reading the word on screen.
-   */
-  onMeltdown() {
-    if (!this.enabled) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-
-    for (const [mult, type, peak] of [
-      [1, 'sawtooth', 0.2],
-      [1.5, 'sawtooth', 0.15],
-      [2, 'square', 0.1],
-    ] as const) {
-      const osc = ctx.createOscillator();
-      osc.type = type;
-      osc.frequency.setValueAtTime(ROOT_HZ * mult, when);
-      osc.frequency.exponentialRampToValueAtTime(ROOT_HZ * mult * 4, when + 0.42);
-      const g = this.env(osc, peak, 0.008, 0.5, when);
-      g.connect(this.sfxBus);
-      osc.start(when);
-      osc.stop(when + 0.6);
+    g.gain.value = 0;
+    g.connect(this.master);
+    for (const [mult, type] of [[1, 'sine'], [1.5, 'sine'], [2.005, 'triangle']] as const) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = ROOT * 0.5 * mult;
+      const og = ctx.createGain();
+      og.gain.value = mult === 1 ? 0.6 : 0.25;
+      o.connect(og).connect(g);
+      o.start();
     }
-    this.noiseBurst(when, 0.3, 0.45, 2600, 'highpass');
+    this.droneGain = g;
   }
 
-  onMeltdownEnd() {
-    if (!this.enabled) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(ROOT_HZ * 3, when);
-    osc.frequency.exponentialRampToValueAtTime(ROOT_HZ * 0.75, when + 0.34);
-    const g = this.env(osc, 0.13, 0.006, 0.36, when);
-    g.connect(this.sfxBus);
-    osc.start(when);
-    osc.stop(when + 0.45);
-  }
-
-  /** Zone arrival: an open fifth, high and clean, over a soft noise swell. */
-  onZone() {
-    if (!this.enabled) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-    for (const [deg, delay] of [[0, 0], [7, 0.07], [12, 0.14]] as const) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = semitone(deg + 36);
-      const g = this.env(osc, 0.11, 0.01, 0.55, when + delay);
-      g.connect(this.sfxBus);
-      osc.start(when + delay);
-      osc.stop(when + delay + 0.7);
+  private setAlarm(on: boolean) {
+    if (!this.ctx) return;
+    if (on && !this.alarmGain) {
+      const ctx = this.ctx;
+      const g = ctx.createGain();
+      g.gain.value = 0;
+      g.connect(this.sfx);
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = 128;
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = 1.6;
+      const lg = ctx.createGain();
+      lg.gain.value = 0.055;
+      lfo.connect(lg).connect(g.gain);
+      o.connect(g);
+      o.start();
+      lfo.start();
+      this.alarmGain = g;
+    } else if (!on && this.alarmGain) {
+      this.alarmGain.gain.cancelScheduledValues(this.ctx.currentTime);
+      this.alarmGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.08);
+      this.alarmGain.disconnect();
+      this.alarmGain = null;
     }
-    this.noiseBurst(when, 0.07, 0.5, 3400, 'highpass');
   }
 
-  /**
-   * Crossed into a hotter band — a new material just became meltable. A short
-   * rising blip whose pitch tracks the band, so the ear learns the ladder
-   * without the eye leaving the shaft. Cooling stays silent: braking already has
-   * its own feedback, and a sad blip every time you vent would read as being
-   * punished for playing correctly.
-   */
-  onBand(band: number) {
-    if (!this.enabled || !this.running) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-    const f = 440 + band * 150;
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(f * 0.78, when);
-    osc.frequency.exponentialRampToValueAtTime(f, when + 0.06);
-    const g = this.env(osc, 0.07, 0.004, 0.12, when);
-    g.connect(this.sfxBus);
-    osc.start(when);
-    osc.stop(when + 0.2);
+  // --------------------------------------------------------------------- sfx
+  onStrike(targets: number) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    // A rising whoosh: bandpass sweeping up is the cheapest convincing "fast".
+    this.hiss(t, 0.22, 0.24, 500, 'bandpass', 5200);
+    this.tone(hz(24), 'sawtooth', 0.1, 0.16, t, 2.4);
+    if (targets > 0) this.tone(hz(36), 'sine', 0.06, 0.1, t, 1.6);
   }
 
-  onHeal() {
-    if (!this.enabled || !this.running) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-    for (const [deg, delay] of [[0, 0], [7, 0.06]] as const) {
-      const osc = ctx.createOscillator();
-      osc.type = 'triangle';
-      osc.frequency.value = semitone(deg + 24);
-      const g = this.env(osc, 0.14, 0.005, 0.22, when + delay);
-      g.connect(this.sfxBus);
-      osc.start(when + delay);
-      osc.stop(when + delay + 0.3);
+  onKill(kind: EnemyKind, chainIndex: number, combo: number) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    const i = Math.min(chainIndex, 24);
+    const deg = PENTA[i % PENTA.length] + 12 * Math.min(3, Math.floor(i / PENTA.length));
+    const f = hz(deg + 48);
+    this.tone(f, KIND_WAVE[kind], 0.16, 0.13, t, 0.86);
+    this.tone(f * 2, 'sine', 0.05, 0.07, t);
+    this.hiss(t, 0.11, 0.06, 2600 + combo * 60, 'highpass');
+  }
+
+  onOrbPop() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(hz(60), 'sine', 0.09, 0.06, t, 1.8);
+    this.hiss(t, 0.06, 0.04, 4200, 'highpass');
+  }
+
+  onMulti(n: number) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    // A stacked chord, each voice a beat late — the payoff should bloom.
+    const degs = [0, 7, 12, 19, 24];
+    for (let i = 0; i < Math.min(n, degs.length); i++) {
+      this.tone(hz(degs[i] + 24), i === 0 ? 'sawtooth' : 'triangle', 0.13 - i * 0.014, 0.5, t + i * 0.045);
     }
+    this.hiss(t, 0.16, 0.5, 900, 'bandpass', 6000);
+  }
+
+  onBlocked() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    // Two detuned squares an augmented fourth apart: unmistakably "wrong".
+    this.tone(320, 'square', 0.16, 0.22, t, 0.6);
+    this.tone(453, 'square', 0.12, 0.2, t, 0.6);
+    this.hiss(t, 0.2, 0.16, 3000, 'bandpass');
+  }
+
+  onWall() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(88, 'sine', 0.16, 0.14, t, 0.5);
+    this.hiss(t, 0.1, 0.08, 900, 'lowpass');
+  }
+
+  onHurt(hullLeft: number) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(240, 'sawtooth', 0.3, 0.5, t, 0.14);
+    this.hiss(t, 0.3, 0.34, 1400, 'lowpass');
+    if (hullLeft <= 1) this.tone(hz(1), 'sine', 0.2, 0.9, t, 0.5);
   }
 
   onDeath() {
     if (!this.enabled) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(340, when);
-    osc.frequency.exponentialRampToValueAtTime(28, when + 0.9);
-    const g = this.env(osc, 0.32, 0.005, 0.95, when);
-    g.connect(this.sfxBus);
-    osc.start(when);
-    osc.stop(when + 1.05);
-
-    this.noiseBurst(when, 0.34, 0.5, 500, 'lowpass');
+    const t = this.ctx!.currentTime;
+    this.tone(420, 'sawtooth', 0.3, 1.3, t, 0.05);
+    this.hiss(t, 0.32, 0.9, 700, 'lowpass');
+    for (let i = 0; i < 3; i++) {
+      this.tone(hz(12 - i * 5), 'triangle', 0.12, 1.1, t + i * 0.1, 0.7);
+    }
   }
 
-  // ---------------------------------------------------------------- music
-  /**
-   * Lookahead scheduler. Called every frame; queues notes slightly ahead of the
-   * audio clock so timing never depends on requestAnimationFrame jitter.
-   */
+  onHeal() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    [0, 7, 12].forEach((d, i) => this.tone(hz(d + 36), 'triangle', 0.12, 0.3, t + i * 0.05));
+  }
+
+  onWave(n: number) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    const base = 24 + (n % 4) * 2;
+    [0, 5, 7].forEach((d, i) => this.tone(hz(base + d), 'sine', 0.1, 0.45, t + i * 0.09));
+    this.hiss(t, 0.08, 0.4, 4000, 'highpass');
+  }
+
+  onWaveClear() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    [0, 3, 7, 12].forEach((d, i) =>
+      this.tone(hz(d + 36), 'triangle', 0.11, 0.6, t + i * 0.06),
+    );
+  }
+
+  onLancerMark() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(660, 'square', 0.05, 0.1, t, 1.5);
+  }
+
+  onLancerCharge() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.hiss(t, 0.14, 0.3, 700, 'bandpass', 2600);
+    this.tone(150, 'sawtooth', 0.1, 0.3, t, 2.2);
+  }
+
+  onOrb() {
+    if (!this.enabled) return;
+    this.tone(520, 'sine', 0.045, 0.14, this.ctx!.currentTime, 0.7);
+  }
+
+  onHint() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(hz(48), 'sine', 0.07, 0.2, t);
+    this.tone(hz(55), 'sine', 0.05, 0.24, t + 0.07);
+  }
+
+  onComboLost() {
+    if (!this.enabled) return;
+    this.tone(300, 'sine', 0.05, 0.2, this.ctx!.currentTime, 0.55);
+  }
+
+  onUiMove() {
+    if (!this.enabled) return;
+    this.tone(880, 'sine', 0.04, 0.05, this.ctx!.currentTime);
+  }
+
+  // ------------------------------------------------------------------- music
+  /** Lookahead scheduler; called every frame against the audio clock. */
   tick() {
     if (!this.enabled || !this.running) return;
     const ctx = this.ctx!;
+    const slow = this.dilation < 0.45;
+    const bpm = slow ? 66 : 132;
+    const stepDur = 60 / bpm / 4; // sixteenths
 
-    // Tempo rides velocity — the score accelerates because you do. Overdrive
-    // shifts the whole sequencer up a gear so the payoff is audible, not just
-    // a louder version of the same groove.
-    const bpm = (96 + this.speedNorm * 84) * (this.melting ? 1.34 : 1);
-    const stepDur = 60 / bpm / 2; // eighth notes
-
-    const horizon = ctx.currentTime + 0.12;
+    const horizon = ctx.currentTime + 0.14;
     let guard = 0;
-    while (this.nextNoteTime < horizon && guard++ < 16) {
-      this.scheduleStep(this.nextNoteTime, this.step);
-      this.nextNoteTime += stepDur;
+    while (this.nextTime < horizon && guard++ < 24) {
+      this.schedule(this.nextTime, this.step, slow);
+      this.nextTime += stepDur;
       this.step++;
     }
-    // If the tab was backgrounded the clock can fall far behind; resync.
-    if (this.nextNoteTime < ctx.currentTime - 0.5) this.nextNoteTime = ctx.currentTime;
+    if (this.nextTime < ctx.currentTime - 0.4) this.nextTime = ctx.currentTime;
   }
 
-  private scheduleStep(when: number, step: number) {
+  private schedule(when: number, step: number, slow: boolean) {
     const ctx = this.ctx!;
-    const n = this.speedNorm;
+    const bus = this.music;
+    // Bullet time drops everything a clean octave, so it stays in key.
+    const shift = slow ? -12 : 0;
+    const bar = Math.floor(step / 16) % PROGRESSION.length;
+    const chord = PROGRESSION[bar];
+    const s = step % 16;
 
-    // Layer 1 — pulse, always present.
-    if (step % 2 === 0) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(110, when);
-      osc.frequency.exponentialRampToValueAtTime(44, when + 0.09);
-      const g = this.env(osc, 0.32, 0.003, 0.1, when);
-      g.connect(this.musicBus);
-      osc.start(when);
-      osc.stop(when + 0.16);
+    // Kick.
+    if (s === 0 || s === 6 || s === 10) {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(150, when);
+      o.frequency.exponentialRampToValueAtTime(44, when + 0.1);
+      const g = this.env(o, 0.5, 0.002, 0.13, when);
+      g.connect(bus);
+      o.start(when);
+      o.stop(when + 0.2);
     }
 
-    // Layer 2 — bassline, enters at moderate speed.
-    if (n > 0.3) {
-      const pattern = [0, 0, 7, 0, 5, 0, 3, 0];
-      const deg = pattern[step % pattern.length];
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = semitone(deg);
+    // Snare-ish noise on the backbeat.
+    if (s === 4 || s === 12) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'highpass';
+      filt.frequency.value = 1800;
+      src.connect(filt);
+      const g = this.env(filt, 0.14, 0.002, 0.1, when);
+      g.connect(bus);
+      src.start(when);
+      src.stop(when + 0.2);
+    }
+
+    // Hats, thinned out in bullet time so the slow section breathes.
+    if (!slow && s % 2 === 1) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noise;
+      src.playbackRate.value = 2;
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'highpass';
+      filt.frequency.value = 7000;
+      src.connect(filt);
+      const g = this.env(filt, s % 4 === 3 ? 0.05 : 0.028, 0.002, 0.03, when);
+      g.connect(bus);
+      src.start(when);
+      src.stop(when + 0.09);
+    }
+
+    // Bass.
+    if (s % 2 === 0) {
+      const pat = [0, 0, 12, 0, 7, 0, 5, 0];
+      const deg = chord + pat[(s / 2) % pat.length] + shift;
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = hz(deg + 12);
       const filt = ctx.createBiquadFilter();
       filt.type = 'lowpass';
-      filt.frequency.value = 300 + n * 1400;
-      osc.connect(filt);
-      const g = this.env(filt, 0.1 + n * 0.06, 0.005, 0.13, when);
-      g.connect(this.musicBus);
-      osc.start(when);
-      osc.stop(when + 0.2);
+      filt.frequency.value = slow ? 320 : 900;
+      o.connect(filt);
+      const g = this.env(filt, 0.2, 0.005, 0.16, when);
+      g.connect(bus);
+      o.start(when);
+      o.stop(when + 0.28);
     }
 
-    // Layer 3 — arpeggio. Enters on speed OR heat, so a hot, controlled run
-    // sounds as intense as a reckless fast one.
-    if (n > 0.62 || this.heat > 0.55 || this.melting) {
-      const deg = PENTATONIC[step % PENTATONIC.length];
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.value = semitone(deg + 24);
-      const g = this.env(osc, 0.045, 0.004, 0.09, when);
-      g.connect(this.musicBus);
-      osc.start(when);
-      osc.stop(when + 0.14);
-    }
-
-    // Layer 4 — overdrive only: an octave-up lead doubling the arpeggio, plus a
-    // hat on the off-beat. Exists purely so the payoff sounds like a different
-    // piece of music rather than the same one with the gain up.
-    if (this.melting) {
-      const deg = PENTATONIC[(step * 2) % PENTATONIC.length];
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = semitone(deg + 36);
+    // Lead arpeggio — earns its way in as the combo climbs.
+    if (this.combo >= 3 && s % 2 === 1) {
+      const deg = chord + MINOR[(step * 3) % MINOR.length] + 36 + shift;
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = hz(deg);
       const filt = ctx.createBiquadFilter();
       filt.type = 'lowpass';
-      filt.frequency.value = 2600;
-      osc.connect(filt);
-      const g = this.env(filt, 0.05, 0.004, 0.08, when);
-      g.connect(this.musicBus);
-      osc.start(when);
-      osc.stop(when + 0.13);
+      filt.frequency.value = 3200;
+      o.connect(filt);
+      const g = this.env(filt, Math.min(0.06, 0.02 + this.combo * 0.004), 0.004, 0.09, when);
+      g.connect(bus);
+      o.start(when);
+      o.stop(when + 0.16);
+    }
 
-      if (step % 2 === 1) this.noiseBurst(when, 0.035, 0.04, 7000, 'highpass');
+    // Pad — a held fifth under everything, only in bullet time.
+    if (slow && s === 0) {
+      for (const d of [0, 7]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = hz(chord + d + 24 + shift);
+        const filt = ctx.createBiquadFilter();
+        filt.type = 'lowpass';
+        filt.frequency.value = 700;
+        o.connect(filt);
+        const g = this.env(filt, 0.05, 0.12, 1.1, when);
+        g.connect(bus);
+        o.start(when);
+        o.stop(when + 1.4);
+      }
     }
   }
 }

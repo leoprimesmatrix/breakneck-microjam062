@@ -1,10 +1,23 @@
-import type { Palette } from '../game/biomes';
-import { MOLTEN, rgba } from '../game/biomes';
-import { randRange } from './math';
+import { rgba, type RGB } from '../config';
+import { TAU, randRange, type Rng } from './math';
 
-export type ParticleTint = 'cool' | 'hot' | 'molten';
+/**
+ * Additive particle pool.
+ *
+ * Fixed capacity, round-robin recycling, zero allocation during a run. Colour
+ * is carried per particle rather than looked up from a palette, because the
+ * whole readability scheme rests on debris being the colour of the thing that
+ * produced it — magenta shards mean a ward died, orange means a lancer did.
+ */
 
-interface Particle {
+const enum Shape {
+  Shard = 0,
+  Streak = 1,
+  Ring = 2,
+  Bar = 4,
+}
+
+interface P {
   x: number;
   y: number;
   vx: number;
@@ -14,25 +27,27 @@ interface Particle {
   size: number;
   rot: number;
   vrot: number;
-  tint: ParticleTint;
-  /** Shards tumble; streaks stretch along their velocity; rings expand. */
-  shape: 0 | 1 | 2;
+  drag: number;
+  col: RGB;
+  shape: Shape;
   active: boolean;
+  /** Ring only: how far it expands, and its starting width. */
+  grow: number;
+  width: number;
 }
 
-const CAPACITY = 1100;
+const CAPACITY = 1600;
 
-/** Fixed-capacity pool — no allocation during a run, no GC hitches at speed. */
 export class Particles {
-  private pool: Particle[] = [];
+  private pool: P[] = [];
   private cursor = 0;
 
   constructor() {
     for (let i = 0; i < CAPACITY; i++) {
       this.pool.push({
-        x: 0, y: 0, vx: 0, vy: 0,
-        life: 0, maxLife: 1, size: 0,
-        rot: 0, vrot: 0, tint: 'cool', shape: 0, active: false,
+        x: 0, y: 0, vx: 0, vy: 0, life: 0, maxLife: 1, size: 0,
+        rot: 0, vrot: 0, drag: 2, col: [255, 255, 255], shape: Shape.Shard,
+        active: false, grow: 1, width: 2,
       });
     }
   }
@@ -41,61 +56,89 @@ export class Particles {
     for (const p of this.pool) p.active = false;
   }
 
-  private take(): Particle {
-    // Round-robin: oldest slots get recycled first under pressure.
+  private take(): P {
     const p = this.pool[this.cursor];
     this.cursor = (this.cursor + 1) % CAPACITY;
     return p;
   }
 
-  /** Shards thrown from a shattered block, inheriting the player's momentum. */
-  shards(
-    cx: number,
-    cy: number,
-    inheritVy: number,
-    count: number,
-    rng: () => number,
-    tint: ParticleTint = 'cool',
-  ) {
+  /** The main death effect: a hard radial spray of shards and streaks. */
+  burst(x: number, y: number, col: RGB, count: number, power: number, rng: Rng) {
     for (let i = 0; i < count; i++) {
       const p = this.take();
-      const a = rng() * Math.PI * 2;
-      const spd = randRange(rng, 120, 620);
-      p.x = cx + randRange(rng, -26, 26);
-      p.y = cy + randRange(rng, -14, 14);
+      // Even angular spread with jitter reads as an explosion; pure random
+      // clumps and reads as a puff.
+      const a = (i / count) * TAU + randRange(rng, -0.35, 0.35);
+      const spd = randRange(rng, 150, 720) * power;
+      p.x = x + Math.cos(a) * randRange(rng, 0, 10);
+      p.y = y + Math.sin(a) * randRange(rng, 0, 10);
       p.vx = Math.cos(a) * spd;
-      // Shards keep a fraction of your speed, which is what sells the impact.
-      p.vy = Math.sin(a) * spd + inheritVy * 0.42;
-      p.maxLife = randRange(rng, 0.26, 0.62);
+      p.vy = Math.sin(a) * spd;
+      p.maxLife = randRange(rng, 0.22, 0.66);
       p.life = p.maxLife;
-      p.size = randRange(rng, 2.5, 7.5);
-      p.rot = rng() * Math.PI;
-      p.vrot = randRange(rng, -14, 14);
-      p.tint = tint;
-      // A third of the debris streaks instead of tumbling; mixing the two reads
-      // as "material shattering" rather than "squares appeared".
-      p.shape = rng() < 0.34 ? 1 : 0;
+      p.size = randRange(rng, 2.2, 6.4) * power;
+      p.rot = rng() * TAU;
+      p.vrot = randRange(rng, -18, 18);
+      p.drag = randRange(rng, 2.4, 5);
+      p.col = col;
+      p.shape = rng() < 0.45 ? Shape.Streak : Shape.Shard;
       p.active = true;
     }
   }
 
-  /**
-   * Expanding shockwave. One ring costs a single stroked arc and does more for
-   * the weight of an impact than another twenty shards would.
-   */
-  ring(cx: number, cy: number, power: number) {
+  /** Expanding shockwave. One stroked arc does more than twenty more shards. */
+  ring(x: number, y: number, col: RGB, radius: number, life = 0.42, width = 3) {
     const p = this.take();
-    p.x = cx;
-    p.y = cy;
+    p.x = x;
+    p.y = y;
     p.vx = 0;
     p.vy = 0;
-    p.maxLife = 0.28 + power * 0.34;
-    p.life = p.maxLife;
-    p.size = 12 + power * 26;
-    p.rot = 0;
-    p.vrot = 0;
-    p.tint = power > 1 ? 'molten' : 'cool';
-    p.shape = 2;
+    p.maxLife = life;
+    p.life = life;
+    p.size = radius * 0.25;
+    p.grow = radius;
+    p.width = width;
+    p.col = col;
+    p.shape = Shape.Ring;
+    p.active = true;
+  }
+
+  /** A thin bar thrown along a direction — used for the strike's spall. */
+  spall(x: number, y: number, ang: number, col: RGB, count: number, rng: Rng) {
+    for (let i = 0; i < count; i++) {
+      const p = this.take();
+      const a = ang + randRange(rng, -0.5, 0.5) + (rng() < 0.5 ? Math.PI : 0);
+      const spd = randRange(rng, 220, 900);
+      p.x = x;
+      p.y = y;
+      p.vx = Math.cos(a) * spd;
+      p.vy = Math.sin(a) * spd;
+      p.maxLife = randRange(rng, 0.12, 0.34);
+      p.life = p.maxLife;
+      p.size = randRange(rng, 1.6, 4);
+      p.drag = 5;
+      p.col = col;
+      p.shape = Shape.Streak;
+      p.rot = 0;
+      p.vrot = 0;
+      p.active = true;
+    }
+  }
+
+  /** A short, fat, fading bar — the "impact plate" under a kill. */
+  plate(x: number, y: number, ang: number, col: RGB, len: number) {
+    const p = this.take();
+    p.x = x;
+    p.y = y;
+    p.vx = 0;
+    p.vy = 0;
+    p.rot = ang;
+    p.maxLife = 0.2;
+    p.life = 0.2;
+    p.size = len;
+    p.width = 10;
+    p.col = col;
+    p.shape = Shape.Bar;
     p.active = true;
   }
 
@@ -107,58 +150,69 @@ export class Particles {
         p.active = false;
         continue;
       }
-      if (p.shape === 2) continue; // rings are pure animation
+      if (p.shape === Shape.Ring || p.shape === Shape.Bar) continue;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      p.vy += 1400 * dt; // shards fall away hard
-      p.vx *= Math.exp(-2.6 * dt);
+      const k = Math.exp(-p.drag * dt);
+      p.vx *= k;
+      p.vy *= k;
       p.rot += p.vrot * dt;
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, camY: number, pal: Palette) {
-    // Debris is emissive: additive blending is what makes a burst read as light
-    // coming off a break rather than confetti drifting over the art.
-    const prevOp = ctx.globalCompositeOperation;
+  draw(ctx: CanvasRenderingContext2D) {
+    const prev = ctx.globalCompositeOperation;
     ctx.globalCompositeOperation = 'lighter';
 
     for (const p of this.pool) {
       if (!p.active) continue;
-      const sy = p.y - camY;
-      if (sy < -120 || sy > 980) continue;
+      const t = p.life / p.maxLife;
 
-      const a = p.life / p.maxLife;
-      const col = p.tint === 'hot' ? pal.hot : p.tint === 'molten' ? MOLTEN : pal.fg;
-
-      if (p.shape === 2) {
-        const grow = 1 - a;
-        ctx.strokeStyle = rgba(col, a * a * 0.85);
-        ctx.lineWidth = 1 + a * 3.5;
-        ctx.beginPath();
-        ctx.arc(p.x, sy, p.size * (0.4 + grow * 2.6), 0, Math.PI * 2);
-        ctx.stroke();
-        continue;
+      switch (p.shape) {
+        case Shape.Ring: {
+          const g = 1 - t;
+          const r = p.size + (p.grow - p.size) * (1 - (1 - g) * (1 - g));
+          ctx.strokeStyle = rgba(p.col, t * t * 0.95);
+          ctx.lineWidth = Math.max(0.4, p.width * t);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r, 0, TAU);
+          ctx.stroke();
+          break;
+        }
+        case Shape.Bar: {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = rgba(p.col, t * 0.7);
+          const h = p.width * t;
+          ctx.fillRect(-p.size * 0.5, -h * 0.5, p.size, h);
+          ctx.restore();
+          break;
+        }
+        case Shape.Streak: {
+          const sp = Math.hypot(p.vx, p.vy);
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(Math.atan2(p.vy, p.vx));
+          ctx.fillStyle = rgba(p.col, t);
+          const len = Math.min(54, 3 + sp * 0.028);
+          ctx.fillRect(-len * 0.5, -p.size * 0.18, len, p.size * 0.36);
+          ctx.restore();
+          break;
+        }
+        default: {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = rgba(p.col, t);
+          const s = p.size * (0.4 + t * 0.6);
+          ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
+          ctx.restore();
+        }
       }
-
-      ctx.fillStyle = rgba(col, a);
-      ctx.save();
-      ctx.translate(p.x, sy);
-
-      if (p.shape === 1) {
-        // Streak: oriented along travel, length scaled by speed.
-        const sp = Math.hypot(p.vx, p.vy);
-        ctx.rotate(Math.atan2(p.vy, p.vx));
-        const len = Math.min(38, 4 + sp * 0.03);
-        ctx.fillRect(0, -p.size * 0.16, len, p.size * 0.32);
-      } else {
-        ctx.rotate(p.rot);
-        const s = p.size * (0.45 + a * 0.55);
-        ctx.fillRect(-s * 0.5, -s * 0.5, s, s);
-      }
-      ctx.restore();
     }
 
     ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = prevOp;
+    ctx.globalCompositeOperation = prev;
   }
 }

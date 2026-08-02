@@ -1,76 +1,103 @@
+import type { RGB } from '../config';
+import { COL } from '../config';
+
 /**
- * Impact feedback: freeze frames, screenshake, flashes, slow motion.
- * Kept separate from the sim so effects can never change gameplay outcomes.
+ * Impact feedback: freeze frames, shake, flashes, lens punch.
+ *
+ * Deliberately isolated from the simulation — nothing in here can change an
+ * outcome, which means it can be tuned to the edge of tasteless without any
+ * risk of making the game unfair.
  */
 export class Juice {
   /** Seconds of frozen simulation remaining. */
   hitstop = 0;
-  /** Current shake magnitude in px. */
+  /** Current shake magnitude in arena units. */
   shake = 0;
-  /** 0..1 white-out. */
+  /** Directional kick, decays independently of the random shake. */
+  kickX = 0;
+  kickY = 0;
+  /** 0..1 screen flash, with its own colour. */
   flash = 0;
-  /** Seconds of slow motion remaining. */
+  flashCol: RGB = COL.ink;
+  /** Seconds of slow motion remaining (independent of aim-time dilation). */
   slowmo = 0;
-  /**
-   * Instantaneous camera zoom kick, as a fraction. Shake moves the frame;
-   * punch moves the *lens*, which is what makes an impact feel like it happened
-   * to the viewer rather than to the scenery.
-   */
+  /** Lens zoom kick as a fraction of 1. */
   punch = 0;
+  /** Extra chromatic aberration on top of the speed-driven amount. */
+  fringe = 0;
 
-  private shakeSeed = Math.random() * 1000;
+  private seed = Math.random() * 1000;
   private t = 0;
 
   reset() {
     this.hitstop = 0;
     this.shake = 0;
+    this.kickX = 0;
+    this.kickY = 0;
     this.flash = 0;
     this.slowmo = 0;
     this.punch = 0;
+    this.fringe = 0;
   }
 
-  addHitstop(seconds: number) {
-    if (seconds > this.hitstop) this.hitstop = seconds;
+  addHitstop(s: number) {
+    if (s > this.hitstop) this.hitstop = s;
   }
 
-  addShake(magnitude: number) {
-    if (magnitude > this.shake) this.shake = magnitude;
+  addShake(m: number) {
+    if (m > this.shake) this.shake = m;
   }
 
-  addFlash(amount: number) {
-    if (amount > this.flash) this.flash = amount;
+  addKick(dx: number, dy: number, m: number) {
+    this.kickX += dx * m;
+    this.kickY += dy * m;
   }
 
-  addSlowmo(seconds: number) {
-    if (seconds > this.slowmo) this.slowmo = seconds;
+  addFlash(a: number, col: RGB = COL.ink) {
+    if (a > this.flash) {
+      this.flash = a;
+      this.flashCol = col;
+    }
   }
 
-  addPunch(amount: number) {
-    if (amount > this.punch) this.punch = amount;
+  addSlowmo(s: number) {
+    if (s > this.slowmo) this.slowmo = s;
   }
 
-  /** Multiplier applied to sim dt. */
-  get timeScale() {
-    return this.slowmo > 0 ? 0.3 : 1;
+  addPunch(a: number) {
+    if (a > this.punch) this.punch = a;
   }
 
-  /** Advances effect timers on real (unscaled) time. */
+  addFringe(a: number) {
+    if (a > this.fringe) this.fringe = a;
+  }
+
+  /** Multiplier applied to sim time by *impact* slow motion. */
+  get slowScale() {
+    return this.slowmo > 0 ? 0.26 : 1;
+  }
+
   update(dtReal: number) {
     this.t += dtReal;
     if (this.slowmo > 0) this.slowmo -= dtReal;
-    // Shake and flash decay fast; a long tail reads as mushy rather than punchy.
-    this.shake *= Math.exp(-11 * dtReal);
-    if (this.shake < 0.05) this.shake = 0;
-    // Flash decays hard: a full-screen wash on a 3-colour palette has to be a
-    // 2-3 frame punctuation mark, never a tint the art has to live underneath.
-    this.flash *= Math.exp(-26 * dtReal);
+
+    this.shake *= Math.exp(-10 * dtReal);
+    if (this.shake < 0.04) this.shake = 0;
+
+    const k = Math.exp(-13 * dtReal);
+    this.kickX *= k;
+    this.kickY *= k;
+
+    this.flash *= Math.exp(-15 * dtReal);
     if (this.flash < 0.004) this.flash = 0;
-    // Punch springs back faster than shake so the two read as separate events.
-    this.punch *= Math.exp(-14 * dtReal);
-    if (this.punch < 0.0005) this.punch = 0;
+
+    this.punch *= Math.exp(-12 * dtReal);
+    if (this.punch < 0.0004) this.punch = 0;
+
+    this.fringe *= Math.exp(-8 * dtReal);
+    if (this.fringe < 0.002) this.fringe = 0;
   }
 
-  /** Consume frozen time; returns true if the sim should be skipped this step. */
   consumeHitstop(dtReal: number) {
     if (this.hitstop <= 0) return false;
     this.hitstop -= dtReal;
@@ -78,12 +105,14 @@ export class Juice {
   }
 
   offsetX() {
-    if (this.shake === 0) return 0;
-    return Math.sin(this.t * 97 + this.shakeSeed) * this.shake;
+    return this.shake === 0 && this.kickX === 0
+      ? 0
+      : Math.sin(this.t * 91 + this.seed) * this.shake + this.kickX;
   }
 
   offsetY() {
-    if (this.shake === 0) return 0;
-    return Math.cos(this.t * 113 + this.shakeSeed * 1.7) * this.shake;
+    return this.shake === 0 && this.kickY === 0
+      ? 0
+      : Math.cos(this.t * 107 + this.seed * 1.7) * this.shake + this.kickY;
   }
 }

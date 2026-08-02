@@ -3,18 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#06070c" />
-    <title>BREAKNECK</title>
+    <meta name="theme-color" content="#04050C" />
+    <meta name="description" content="AFTERBURN — hold to aim in bullet time, release to become a lance of light. Everything on the line dies." />
+    <title>AFTERBURN</title>
     <style>
       html, body {
         margin: 0;
         padding: 0;
         height: 100%;
         overflow: hidden;
-        background: #06070c;
+        background: #04050c;
         touch-action: none;
         overscroll-behavior: none;
-        /* No text selection or long-press callouts when steering by touch. */
         -webkit-user-select: none;
         user-select: none;
         -webkit-touch-callout: none;
@@ -22,15 +22,34 @@
       }
       canvas {
         display: block;
-        /* Full-bleed: the renderer centres the shaft and fills the rest with
-           the exterior, so there is never a letterbox to look at. */
         width: 100%;
         height: 100%;
+        /* The reticle is drawn by the renderer; the arrow would only ever be a
+           second, worse cursor sitting on top of it. */
+        cursor: none;
+      }
+      /* Shown until the module boots, then removed. A blank black rectangle is
+         indistinguishable from a broken build, and a judge will not wait. */
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: #7e92be;
+        font: 600 12px/1 "Inter", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+        letter-spacing: 0.4em;
+        text-transform: uppercase;
+        pointer-events: none;
+        transition: opacity 0.4s ease;
       }
     </style>
   </head>
   <body>
     <canvas id="game"></canvas>
+    <div id="boot">Loading</div>
+    <!-- The splash is dismissed from main.ts. A second inline module here would
+         be treated as its own entry by the bundler and silently dropped when the
+         build collapses everything into one file. -->
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

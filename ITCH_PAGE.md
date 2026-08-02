@@ -10,13 +10,13 @@ real points.
 ## Title
 
 ```
-BREAKNECK
+AFTERBURN
 ```
 
 ## Short description / tagline (the one-liner under the title)
 
 ```
-Speed is the only thing that cuts. Dive fast enough to melt straight through the shaft — but the heat that gets you through is also burning you alive.
+Hold to aim and the world drops into bullet time. Release and you become a lance of light. Everything on the line dies.
 ```
 
 ---
@@ -24,111 +24,105 @@ Speed is the only thing that cuts. Dive fast enough to melt straight through the
 ## Page body
 
 ```
-You are falling, and you are getting hotter.
+You cannot walk. You cannot shoot. You can only STRIKE.
 
-HEAT is the whole game. Diving builds it. Heat is the only thing that melts the
-barriers in the shaft — and past the redline it is burning through your hull.
-It is your weapon, your score multiplier and the thing killing you, all at once.
+HOLD — time slows to a crawl and a line extends from your ship. It shows you
+exactly what you are about to kill, in the order you will kill it, and exactly
+where you will stop.
 
-Nothing has a number on it. Barriers are made of something, and you read them
-the way you read anything real:
+RELEASE — you become that line. Anything standing on it is gone.
 
-  GLASS   thin, translucent, cracked   melts cold
-  GRATE   see-through lattice          melts warm
-  PLATE   solid, riveted               melts hot
-  CORE    banded, glowing seams        meltdown only
+The cost is FOCUS. Aiming burns it; kills refill it. Run dry and the world stops
+slowing down for you. Aggression buys you time to think. Hesitating spends it.
 
-Anything you can melt glows and softens as you approach. Anything you cannot is
-cold, hard-edged and hazard-striped. You never compare two numbers — you look.
+—
 
+CONTACTS
+
+  MOTE     Drifts toward you. Anything on your line dies.
+  SEEDER   Bursts into three Motes when it dies.
+  WARD     Its shield turns to face you. Strike the flank.
+  LANCER   Marks a line, then charges down it. Get off the line.
+  SPINE    Rooted gun. Its orbs sit on your line like anything else.
+
+—
 
 CONTROLS
 
-  W      —  dive, build heat
-  A / D  —  steer (authority drops as you speed up)
-  S      —  vent, dump heat before it burns you
-  SPACE  —  restart instantly
-  M      —  mute
+  Mouse      Aim at the cursor · hold left button · release to strike
+  Keyboard   WASD or arrows steer the reticle · hold Space or Shift · release
+  Touch      Touch anywhere to aim through that point · release to strike
+  P / Esc    Pause          M   Mute
 
-Plays with touch too — sides steer, middle dives, bottom vents.
+Chain kills in a single strike for DOUBLE, TRIPLE, QUAD, RAMPAGE and worse.
+Clear waves. Chase the rank.
 
+—
 
-HOW TO GO DEEP
-
-  • Watch the ship, not the HUD. Dark steel is cold. Ember, orange, white-hot is
-    the ladder. The bar at the bottom shows which materials that heat opens.
-  • Doing nothing makes you COLD, and cold bounces off everything. Heat has to be
-    dived for.
-  • Smashing heats you up. Ploughing a soft gauntlet is the fastest way to the
-    redline — which is exactly where you both want and do not want to be.
-  • Past the REDLINE your hull burns, continuously. Vent, or commit.
-  • MELTDOWN at full heat: four seconds where nothing touches you and CORE walls
-    open. It costs about a hull pip to reach, and you come out still hot.
-  • CORE is the only thing you must always steer around. It is why you steer.
-  • Every 700m the shaft changes: five named zones, then round again deeper.
-  • Get ranked D through SS when you finally go down.
-
-
-HOW I USED THE THEME (Speed)
-
-Speed is not a stat here, it is the entire verb — it is the only thing that makes
-heat, and heat is the only thing that does anything. Fall faster, burn hotter,
-melt more, score more, and get closer to cooking yourself. The music's tempo is
-driven by your actual velocity, the camera pulls back and the lens splits as the
-shaft starts moving too fast to hold together, and the redline has its own alarm.
-
-
-HOW I USED THE PREREQUISITE (Speed is your weapon!)
-
-There is no attack button. The only weapon is velocity, laundered through heat:
-you go through a barrier because you are hot enough, and you are hot enough
-because you were falling fast enough. That is the literal collision rule.
-
-The twist is that the weapon is pointed at you as well. The heat that opens the
-shaft is burning your hull the whole time you hold it, steering gets worse the
-faster you go, and the toughest material in the game cannot be melted at all
-without deliberately overheating first. Every second you are choosing how much
-of the weapon to point at yourself.
-
-
-MADE FOR MICRO JAM 062
-
-Built from scratch in the jam window. No engine — hand-written TypeScript on a
-2D canvas, including the bloom, the chromatic aberration and the grain. All sound
-is generated live in the browser with the Web Audio API; there is not a single
-audio file in the build. The whole game is one 60KB HTML file, and it fills
-whatever window you give it.
+Runs in the browser. No install, no assets, no loading screen — the whole game is
+one 27 kB HTML file, and every pixel, note and letterform in it is generated at
+runtime from code.
 ```
 
 ---
 
-## Upload settings
+## How I used the theme (Speed)
 
-| Setting | Value |
-|---|---|
-| Kind of project | **HTML** |
-| Upload | `breakneck-web.zip` |
-| Check | **"This file will be played in the browser"** |
-| Embed width | **1000** |
-| Embed height | **760** |
-| Fullscreen button | **enabled** |
-| Mobile friendly | **enabled** (touch controls are implemented) |
-| Cover image | `shots/cover-630x500.png` |
+```
+Speed is not a stat in AFTERBURN — it is the entire verb. The ship has no thrust,
+no gun and no brake. The only thing it can do is travel three thousand units a
+second in a straight line, and that is also the only thing that can kill.
 
-**Give it as much width as you can.** The playfield now fills the entire canvas
-edge to edge — there is no letterbox and no fixed shaft. Vertical lookahead is
-pinned, so extra width simply becomes extra lanes (7 on a phone, up to 14 on a
-monitor) and the game plays the same at every aspect. A wider embed is just more
-game visible at once.
+The design problem with a fast game is that fast is usually unreadable, and
+unreadable is not exciting, it is just noisy. So the game gives the player the
+dial: hold, and the world drops to a tenth speed while you read the board;
+release, and it snaps back to full. The contrast is the point. A strike only
+feels like 3000 units per second because the half-second before it was spent at
+300.
+```
 
-The build is a single `index.html` at the zip root — itch will find it automatically.
+## How I used the prerequisite (Speed is your weapon!)
+
+```
+Literally, and with nothing else in the game to dilute it. There is no projectile,
+no melee, no charge attack — the damage model is "were you moving through this
+thing". Enemies die by being on the line your velocity draws.
+
+The one enemy that bends the rule proves it: a WARD carries a shield that turns
+to face you, so raw speed pointed straight at it accomplishes nothing. You have
+to spend a strike getting to its flank and a second one killing it. Its whole
+purpose is to make the player feel the difference between having speed and
+aiming it.
+```
+
+---
 
 ## Tags
 
 ```
-arcade, score-attack, minimalist, fast-paced, high-score, one-more-run,
-procedural, html5, singleplayer, difficult
+arcade, bullet-time, slow-motion, twin-stick, score-attack, minimalist, neon,
+html5, no-install, singleplayer
 ```
 
-Do **not** add `#gamemaker`, `#ziva`, or `#easel` — those tags are for the sponsor
-prize categories and we didn't use those tools.
+Do **not** tag `#gamemaker`, `#ziva` or `#easel` — those are reserved for the
+sponsor categories, and none of them were used to build this.
+
+## Settings
+
+- **Kind of project:** HTML
+- **Uploads:** `dist/index.html`, ticked "This file will be played in the browser"
+- **Viewport:** 1280 × 720, *Fullscreen button: yes*, *Mobile friendly: yes*,
+  *Automatically start on page load: yes*
+- **Genre:** Action
+- **Platform:** HTML5 (this is what keeps the entry eligible for Judge's Choice,
+  which is drawn from the top ten web games)
+- **Release status:** Released
+
+## Screenshot shot list
+
+1. Bullet-time aim with a four-target line and the ×4 readout — the whole game in
+   one frame.
+2. The strike itself, mid-flight, with the score pops climbing along the beam.
+3. A WARD blocking a line: the red X, the red tail, the word SHIELDED.
+4. The results screen with a rank badge.
+5. The title screen.

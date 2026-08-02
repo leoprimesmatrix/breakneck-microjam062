@@ -1,492 +1,830 @@
 import {
-  BOUNCE_MIN_VY,
-  BOUNCE_SPEED_KEEP,
-  BREAK_KEEP_EASY,
-  BREAK_KEEP_HARD,
-  CAM_ANCHOR,
-  CHAIN_HEAL_AT,
-  CHAIN_MULT_CAP,
-  CHAIN_TIMEOUT,
-  HEAT_REDLINE,
+  AIM_TIMESCALE,
+  AIM_TIMESCALE_DRY,
+  COL,
+  COMBO_CAP,
+  COMBO_TIMEOUT,
+  FOCUS_DRAIN,
+  FOCUS_MAX,
+  FOCUS_PER_KILL,
+  FOCUS_REGEN,
+  FOCUS_WAVE_REFILL,
+  HINT_CARD_TIME,
+  HURT_KNOCKBACK,
   IFRAME_TIME,
-  INTRO_TIME,
-  MAX_HEALTH,
-  PX_PER_M,
-  SCORE_PER_BREAK,
-  ZONE_CARD_TIME,
+  MAX_HULL,
+  MULTI_NAMES,
+  PLAYER_R,
+  STRIKE_RANGE_PER_KILL,
+  TIMESCALE_EASE,
+  WAVE_BREATHER,
+  WAVE_CARD_TIME,
+  WAVE_CLEAR_BONUS,
+  type RGB,
 } from '../config';
 import { Audio } from '../engine/audio';
-import { Juice } from '../engine/juice';
-import { lerp, makeRng } from '../engine/math';
-import { Particles } from '../engine/particles';
 import type { Input } from '../engine/input';
+import { Juice } from '../engine/juice';
+import { TAU, clamp, damp, makeRng, randRange, type Rng } from '../engine/math';
+import { Particles } from '../engine/particles';
 import { view } from '../viewport';
-import { paletteAt, zoneIndexAt, zoneName, zoneSub } from './biomes';
-import { Heat } from './heat';
+import { ORB_R, SPECS, Swarm, type Enemy, type EnemyKind } from './enemies';
 import { Player } from './player';
-import { World, type Block } from './world';
+import { clonePlan, solveStrike, type StrikePlan } from './strike';
+import { Director } from './waves';
 
-export type GameState = 'title' | 'play' | 'dead';
-
-/**
- * Bumped to v2 with the heat redesign. Scores from the old tier economy ran an
- * order of magnitude higher, so a carried-over best would sit permanently out of
- * reach and "NEW BEST" could never fire again.
- */
-const BEST_KEY = 'breakneck.best.v2';
-const RUNS_KEY = 'breakneck.runs.v2';
-
-export type PopupKind = 'chain' | 'heal' | 'melt' | 'fail' | 'burn';
+export type GameState = 'title' | 'play' | 'paused' | 'dead';
+export type PopupKind = 'score' | 'multi' | 'good' | 'bad' | 'wave';
 
 export interface Popup {
   x: number;
   y: number;
+  vy: number;
   text: string;
+  sub: string;
+  kind: PopupKind;
+  col: RGB;
   life: number;
   max: number;
-  kind: PopupKind;
-  big: boolean;
+  scale: number;
 }
 
-/** End-of-run grade. The single strongest "one more" lever a score game has. */
-const RANKS: { min: number; label: string }[] = [
-  { min: 50000, label: 'SS' },
-  { min: 32000, label: 'S' },
-  { min: 20000, label: 'A' },
-  { min: 12000, label: 'B' },
-  { min: 7000, label: 'C' },
-  { min: 0, label: 'D' },
+export interface HintCard {
+  kind: EnemyKind;
+  life: number;
+}
+
+const BEST_KEY = 'afterburn.best.v1';
+const WAVE_KEY = 'afterburn.wave.v1';
+const RUNS_KEY = 'afterburn.runs.v1';
+
+const RANKS: { min: number; label: string; note: string }[] = [
+  { min: 120000, label: 'SS', note: 'Nothing survives the line.' },
+  { min: 62000, label: 'S', note: 'Surgical.' },
+  { min: 30000, label: 'A', note: 'Reading the whole board.' },
+  { min: 14000, label: 'B', note: 'Getting dangerous.' },
+  { min: 5000, label: 'C', note: 'Finding the rhythm.' },
+  { min: 0, label: 'D', note: 'Hold longer. Aim through.' },
 ];
+
+export const ENEMY_COL: Record<EnemyKind, RGB> = {
+  mote: COL.mote,
+  seeder: COL.seeder,
+  ward: COL.ward,
+  lancer: COL.lancer,
+  spine: COL.spine,
+};
 
 export class Game {
   state: GameState = 'title';
 
   readonly player = new Player();
-  readonly world = new World();
+  readonly swarm = new Swarm();
+  readonly director = new Director();
   readonly juice = new Juice();
   readonly particles = new Particles();
   readonly audio = new Audio();
-  readonly heat = new Heat();
+
+  /** Free-running real-time clock. Menus animate off this. */
+  clock = 0;
+  /** Smoothed simulation time scale, 0..1. Drives audio and post as well. */
+  timeScale = 1;
+  /** Wall-clock seconds of the current run. */
+  runTime = 0;
+  /** Seconds since the run ended, for staging the results screen. */
+  deadTime = 0;
+  /** Seconds since the title screen appeared, for staging its entrance. */
+  titleTime = 0;
+
+  score = 0;
+  combo = 1;
+  comboTimer = 0;
+  bestCombo = 1;
+  bestMulti = 0;
+  kills = 0;
+
+  wave = 0;
+  waveCard = 0;
+  waveClear = 0;
+  private breather = 0;
+
+  best = 0;
+  bestWave = 0;
+  runs = 0;
+  isNewBest = false;
+
+  /** Live preview of the strike the player is currently lining up. */
+  aim: StrikePlan | null = null;
+  aimAngle = -Math.PI / 2;
+  aiming = false;
+  /** 0..1 how "dry" the focus meter is; drives the desaturation of aim mode. */
+  aimBlend = 0;
+
+  readonly popups: Popup[] = [];
+  readonly hints: HintCard[] = [];
+  /** Species met this run, in the order they were met — the pause codex. */
+  readonly seenKinds = new Set<EnemyKind>();
 
   /**
-   * Free-running animation clock, advanced on every state including the title
-   * and results screens. Previously the overdrive module's internal pulse was
-   * quietly doing this job for the whole game, which meant deleting it would
-   * have frozen every menu.
+   * Tutorial progress — all of it self-clearing, none of it blocking, and all
+   * of it strictly ordered so two lessons never print in the same place.
    */
-  clock = 0;
+  hasHeld = false;
+  hasStruck = false;
+  moveTaught = 0;
+  focusTaught = 0;
+  private focusPending = false;
 
-  depth = 0; // metres
-  score = 0;
-  bonus = 0;
-  chain = 0;
-  bestChain = 0;
-  chainTimer = 0;
-  runTime = 0;
-  best = 0;
-  isNewBest = false;
-  runs = 0;
-
-  // --- run stats, for the results screen
-  breaks = 0;
-  meltdowns = 0;
-  peakHeat = 0;
-  redlineTime = 0;
-
-  // --- zone presentation
-  zone = 0;
-  zoneCard = 0;
-  zoneCardName = '';
-  zoneCardSub = '';
-
-  /** Goal/intro card countdown; runs at the start of every run. */
-  introT = 0;
-
-  /** Recent positions, newest last, for the motion trail. */
-  readonly trail: { x: number; y: number }[] = [];
-
-  /** Floating world-space labels. */
-  readonly popups: Popup[] = [];
-
-  private input: Input;
-  private rng = makeRng(1);
-  /** Reused each step so collision resolution never allocates. */
-  private hits: Block[] = [];
+  /** Public so the renderer can draw the reticle where the player is pointing. */
+  readonly input: Input;
+  private rng: Rng = makeRng(12345);
+  private hitBuf: number[] = [];
+  /** Seconds a pending release stays live while waiting for the cooldown. */
+  private strikeBuffer = 0;
+  /** Attract-mode ghost, so the title screen demonstrates the verb. */
+  private ghostTimer = 0;
 
   constructor(input: Input) {
     this.input = input;
-    this.best = this.loadNum(BEST_KEY);
-    this.runs = this.loadNum(RUNS_KEY);
-    this.world.reset((Math.random() * 0xffffffff) >>> 0);
+    this.best = this.load(BEST_KEY);
+    this.bestWave = this.load(WAVE_KEY);
+    this.runs = this.load(RUNS_KEY);
+    this.player.reset();
+    this.beginAttract();
   }
 
-  /**
-   * Attract-mode scroll position. Starts deep on purpose: near the surface every
-   * barrier is GLASS, so the title would show none of the tough material the
-   * mechanic turns on.
-   */
-  private titleY = 14000;
-
-  get camY() {
-    return this.state === 'title'
-      ? this.titleY
-      : this.player.y - view.logicalH * CAM_ANCHOR;
-  }
-
-  get camMetres() {
-    return Math.max(0, this.camY / PX_PER_M);
-  }
-
-  get palette() {
-    return paletteAt(this.camMetres);
-  }
-
-  get isFirstRun() {
-    return this.runs === 0;
-  }
-
-  get rank() {
-    return RANKS.find((r) => this.score >= r.min)!.label;
-  }
-
-  /** Scoring multiplier: heat is the dial, the chain compounds it. */
-  get mult() {
-    const chainMult = Math.min(Math.max(1, this.chain), CHAIN_MULT_CAP);
-    return this.heat.mult * chainMult;
-  }
-
-  private popup(x: number, y: number, text: string, kind: PopupKind, big = false) {
-    if (this.popups.length > 18) this.popups.shift();
-    const max = big ? 0.9 : 0.55;
-    this.popups.push({ x, y, text, life: max, max, kind, big });
-  }
-
-  private loadNum(key: string) {
+  private load(key: string) {
     try {
       return Number(localStorage.getItem(key)) || 0;
     } catch {
-      return 0; // private mode / blocked storage: not worth failing a run over
+      return 0;
     }
   }
 
-  private saveNum(key: string, v: number) {
+  private save(key: string, v: number) {
     try {
       localStorage.setItem(key, String(Math.floor(v)));
     } catch {
-      /* ignore */
+      /* private browsing — never worth failing a run over */
+    }
+  }
+
+  get rank() {
+    return RANKS.find((r) => this.score >= r.min)!;
+  }
+
+  get focusFrac() {
+    return clamp(this.player.focus / FOCUS_MAX, 0, 1);
+  }
+
+  get inDanger() {
+    return this.state === 'play' && this.player.hull <= 1;
+  }
+
+  // --------------------------------------------------------------- lifecycle
+  private beginAttract() {
+    this.swarm.reset();
+    this.particles.reset();
+    this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
+    this.player.reset();
+    // NB: titleTime is deliberately *not* reset here. Attract mode restocks the
+    // field whenever it runs dry, and resetting the clock would restart the
+    // wordmark's draw-on every few seconds — the title would never settle.
+    for (let i = 0; i < 7; i++) {
+      const k: EnemyKind = i % 3 === 0 ? 'mote' : i % 3 === 1 ? 'ward' : 'seeder';
+      this.swarm.spawn(
+        k,
+        randRange(this.rng, 120, view.arenaW - 120),
+        randRange(this.rng, 120, view.arenaH - 120),
+        this.rng,
+        0,
+        0.55,
+      );
     }
   }
 
   start() {
-    const seed = (Math.random() * 0xffffffff) >>> 0;
-    this.rng = makeRng(seed);
-    this.world.reset(seed);
+    this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
     this.player.reset();
-    this.juice.reset();
+    this.swarm.reset();
     this.particles.reset();
-    this.heat.reset();
-    this.trail.length = 0;
+    this.juice.reset();
+    this.director.reset();
     this.popups.length = 0;
+    this.hints.length = 0;
+    this.seenKinds.clear();
 
-    this.depth = 0;
     this.score = 0;
-    this.bonus = 0;
-    this.chain = 0;
-    this.bestChain = 0;
-    this.chainTimer = 0;
+    this.combo = 1;
+    this.comboTimer = 0;
+    this.bestCombo = 1;
+    this.bestMulti = 0;
+    this.kills = 0;
     this.runTime = 0;
+    this.deadTime = 0;
     this.isNewBest = false;
-    this.breaks = 0;
-    this.meltdowns = 0;
-    this.peakHeat = 0;
-    this.redlineTime = 0;
+    this.timeScale = 1;
+    this.wave = 0;
+    this.waveClear = 0;
+    this.breather = 0;
+    this.hasHeld = false;
+    this.hasStruck = false;
+    this.moveTaught = 0;
+    this.focusTaught = 0;
+    this.focusPending = false;
+    this.strikeBuffer = 0;
 
-    this.setZone(0, false);
-    this.introT = INTRO_TIME;
     this.state = 'play';
     this.audio.setRunning(true);
+    this.nextWave();
   }
 
-  private setZone(index: number, card: boolean) {
-    this.zone = index;
-    this.zoneCardName = zoneName(index);
-    this.zoneCardSub = zoneSub(index);
-    this.zoneCard = card ? ZONE_CARD_TIME : 0;
-  }
+  private nextWave() {
+    this.wave++;
+    this.director.begin(this.wave, this.rng);
+    this.waveCard = WAVE_CARD_TIME;
+    this.player.focus = Math.min(FOCUS_MAX, this.player.focus + FOCUS_WAVE_REFILL);
+    this.audio.onWave(this.wave);
 
-  // ------------------------------------------------------------------ loop
-  step(dtReal: number) {
-    this.clock += dtReal;
-
-    // Hitstop freezes everything, including particles. That's what makes it read.
-    if (this.juice.consumeHitstop(dtReal)) return;
-    this.juice.update(dtReal);
-
-    const dt = dtReal * this.juice.timeScale;
-
-    if (this.state === 'title') {
-      this.titleY += 250 * dt;
-      this.world.ensure(this.titleY + view.logicalH * 1.6);
-      this.world.prune(this.titleY);
-      if (this.input.takeAnyKey()) this.start();
-    } else if (this.state === 'play') {
-      this.stepPlay(dt);
-    } else if (this.state === 'dead') {
-      this.runTime += dt;
-      if (this.runTime > 0.45 && this.input.takeConfirm()) this.start();
+    // Every fourth wave hands back a hull point. Long runs should be winnable
+    // after a mistake, not permanently poisoned by one.
+    if (this.wave % 4 === 0 && this.player.hull < MAX_HULL) {
+      this.player.hull++;
+      this.pushPopup(this.player.x, this.player.y - 42, '+1 HULL', '', 'good', COL.hull, 1.1);
+      this.audio.onHeal();
     }
-
-    this.particles.update(dt);
-  }
-
-  private stepPlay(dt: number) {
-    const p = this.player;
-    this.runTime += dt;
-
-    // --- heat, and the burn it costs
-    const burn = this.heat.update(dt, p.speedNorm, this.input.brake);
-    p.melting = this.heat.melting;
-    p.heat = this.heat.value;
-    this.peakHeat = Math.max(this.peakHeat, this.heat.value);
-
-    if (this.heat.justMelted) this.onMeltdown();
-    if (this.heat.justCooled) {
-      this.juice.addFlash(0.2);
-      this.audio.onMeltdownEnd();
-    }
-    if (this.heat.bandChanged > 0) this.audio.onBand(this.heat.band);
-
-    if (burn > 0 && p.iframe <= 0) {
-      this.redlineTime += dt;
-      p.health -= burn;
-      // Burning is a slow bleed, so it needs continuous feedback or it reads as
-      // the game randomly taking hull for no reason.
-      this.juice.addShake(1.4 + this.heat.overload * 2.2);
-      if (this.rng() < dt * 22) {
-        this.particles.shards(p.x, p.y, p.vy * 0.2, 2, this.rng, 'hot');
-      }
-    }
-
-    const prevY = p.y;
-    p.step(dt, this.input);
-    p.y = this.resolve(prevY, prevY + p.vy * dt);
-
-    this.depth = Math.max(this.depth, p.y / PX_PER_M);
-
-    const z = zoneIndexAt(this.depth);
-    if (z > this.zone) {
-      this.setZone(z, true);
-      this.juice.addFlash(0.14);
-      this.audio.onZone();
-    }
-    if (this.zoneCard > 0) this.zoneCard -= dt;
-    if (this.introT > 0) this.introT -= dt;
-
-    // Chain lapses if you stop breaking things...
-    if (this.chain > 0) {
-      this.chainTimer -= dt;
-      if (this.chainTimer <= 0) this.chain = 0;
-    }
-
-    // Braking no longer forfeits the chain. Venting already costs heat, which is
-    // both your melting power and your multiplier; taking the chain as well made
-    // cooling strictly dominated and the game punished the one skill it was
-    // asking the player to learn.
-
-    this.score = Math.floor(this.depth) + Math.floor(this.bonus);
-
-    this.world.ensure(this.camY + view.logicalH);
-    this.world.prune(this.camY);
-
-    this.trail.push({ x: p.x, y: p.y });
-    if (this.trail.length > 26) this.trail.shift();
-
-    this.audio.setSpeed(p.speedNorm);
-    this.audio.setHeat(this.heat.value, this.heat.melting, this.heat.redlining);
-
-    for (let k = this.popups.length - 1; k >= 0; k--) {
-      const pu = this.popups[k];
-      pu.life -= dt;
-      pu.y -= 46 * dt; // drift against the fall so they stay readable
-      if (pu.life <= 0) this.popups.splice(k, 1);
-    }
-
-    if (p.health <= 0) this.die();
-  }
-
-  private onMeltdown() {
-    this.meltdowns++;
-    const p = this.player;
-    this.juice.addFlash(0.6);
-    this.juice.addShake(20);
-    this.juice.addSlowmo(0.26);
-    this.juice.addPunch(0.05);
-    this.particles.ring(p.x, p.y, 1.4);
-    this.particles.shards(p.x, p.y, p.vy * 0.4, 34, this.rng, 'molten');
-    this.popup(p.x, p.y - 52, 'MELTDOWN', 'melt', true);
-    this.audio.onMeltdown();
   }
 
   private die() {
     this.state = 'dead';
-    this.runTime = 0;
-    this.popups.length = 0;
+    this.deadTime = 0;
     this.audio.setRunning(false);
     this.audio.onDeath();
-    this.juice.addShake(24);
-    this.juice.addFlash(0.9);
-    this.juice.addHitstop(0.16);
-    this.particles.shards(this.player.x, this.player.y, 0, 54, this.rng, 'hot');
-    this.particles.ring(this.player.x, this.player.y, 1);
+    this.juice.addHitstop(0.24);
+    this.juice.addShake(34);
+    this.juice.addFlash(1, COL.danger);
+    this.juice.addPunch(0.14);
+    this.juice.addSlowmo(0.9);
+    this.particles.burst(this.player.x, this.player.y, COL.player, 64, 1.5, this.rng);
+    this.particles.ring(this.player.x, this.player.y, COL.player, 300, 0.8, 6);
+    this.particles.ring(this.player.x, this.player.y, COL.danger, 190, 0.6, 4);
 
     this.runs++;
-    this.saveNum(RUNS_KEY, this.runs);
-
+    this.save(RUNS_KEY, this.runs);
     if (this.score > this.best) {
       this.best = this.score;
       this.isNewBest = true;
-      this.saveNum(BEST_KEY, this.best);
+      this.save(BEST_KEY, this.best);
+    }
+    if (this.wave > this.bestWave) {
+      this.bestWave = this.wave;
+      this.save(WAVE_KEY, this.bestWave);
     }
   }
 
-  // ------------------------------------------------------------ collision
-  /**
-   * Swept against the vertical span travelled this step so nothing is tunnelled
-   * through at 1800 px/s. Returns the resolved y.
-   */
-  private resolve(prevY: number, newY: number): number {
-    const p = this.player;
-    const r = view.playerR;
-    let finalY = newY;
+  // -------------------------------------------------------------------- loop
+  step(dtReal: number) {
+    this.clock += dtReal;
+    this.input.update(dtReal);
 
-    // Invulnerability phases you through. Without this a single bounce starts an
-    // unrecoverable spiral, and the i-frame window is the only place a run can
-    // be rebuilt — so it has to actually clear space.
-    if (p.iframe > 0) return finalY;
+    if (this.juice.consumeHitstop(dtReal)) return;
+    this.juice.update(dtReal);
 
-    const hits = this.hits;
-    hits.length = 0;
+    if (this.state === 'title') this.stepTitle(dtReal);
+    else if (this.state === 'play') this.stepPlay(dtReal);
+    else if (this.state === 'paused') this.stepPaused(dtReal);
+    else this.stepDead(dtReal);
+  }
 
-    for (const b of this.world.blocks) {
-      if (b.dead) continue;
-      if (newY + r < b.y || prevY - r > b.y + b.h) continue;
-      if (Math.abs(p.x - (b.x + b.w * 0.5)) < r + b.w * 0.5) hits.push(b);
+  private stepTitle(dtReal: number) {
+    this.titleTime += dtReal;
+    const dt = dtReal * 0.6;
+    this.swarm.targetX = view.arenaW * 0.5 + Math.cos(this.clock * 0.4) * 260;
+    this.swarm.targetY = view.arenaH * 0.5 + Math.sin(this.clock * 0.31) * 170;
+    this.swarm.update(dt);
+    this.particles.update(dt);
+
+    // A ghost strike every few seconds, so the title screen teaches the verb
+    // before a single word of instruction is read.
+    this.ghostTimer -= dtReal;
+    if (this.ghostTimer <= 0) {
+      this.ghostTimer = randRange(this.rng, 1.6, 2.8);
+      this.ghostStrike();
     }
 
-    if (hits.length === 0) return finalY;
-    hits.sort(byY);
+    if (this.titleTime > 0.5 && this.input.takeConfirm()) this.start();
+    this.input.takeRelease();
+  }
 
-    for (const b of hits) {
-      // Heat is re-read each time: a long burn-through bleeds speed and can drop
-      // you below the next barrier's threshold. The chain is self-limiting.
-      if (this.heat.canMelt(b.material)) {
-        this.onBreak(b);
-      } else {
-        finalY = b.y - r;
-        this.onBounce(b);
-        break;
+  /** Attract-mode flourish: kill something on screen with a visible line. */
+  private ghostStrike() {
+    const live = this.swarm.list.filter((e) => e.alive && e.spawn <= 0);
+    if (!live.length) {
+      this.beginAttract();
+      return;
+    }
+    const t = live[Math.floor(this.rng() * live.length)];
+    const a = Math.atan2(t.y - this.player.y, t.x - this.player.x);
+    const plan = solveStrike(this.swarm, this.player.x, this.player.y, a);
+    this.player.begin(clonePlan(plan));
+
+    for (const h of plan.hits) {
+      if (h.blocked || !h.enemy) continue;
+      h.enemy.alive = false;
+      this.particles.burst(h.enemy.x, h.enemy.y, ENEMY_COL[h.enemy.kind], 18, 1, this.rng);
+      this.particles.ring(h.enemy.x, h.enemy.y, ENEMY_COL[h.enemy.kind], 78, 0.4, 2.5);
+    }
+    this.player.x = plan.x0 + plan.dx * plan.dist;
+    this.player.y = plan.y0 + plan.dy * plan.dist;
+    this.player.endStrike();
+    this.juice.addShake(4);
+
+    // Keep the attract field stocked.
+    if (this.swarm.liveCount < 5) {
+      const kinds: EnemyKind[] = ['mote', 'ward', 'seeder', 'lancer'];
+      this.swarm.spawn(
+        kinds[Math.floor(this.rng() * kinds.length)],
+        randRange(this.rng, 120, view.arenaW - 120),
+        randRange(this.rng, 120, view.arenaH - 120),
+        this.rng,
+        0.5,
+        0.55,
+      );
+    }
+  }
+
+  private stepPaused(dtReal: number) {
+    this.player.tick(dtReal * 0.15, false);
+    if (this.input.takePause() || this.input.takeConfirm()) {
+      this.state = 'play';
+      this.audio.setRunning(true);
+    }
+    this.input.takeRelease();
+  }
+
+  private stepDead(dtReal: number) {
+    this.deadTime += dtReal;
+    const dt = dtReal * 0.35;
+    this.swarm.targetX = this.player.x;
+    this.swarm.targetY = this.player.y;
+    this.swarm.update(dt);
+    this.particles.update(dt);
+    this.stepPopups(dt);
+    if (this.deadTime > 0.8 && (this.input.takeConfirm() || this.input.takeRelease())) {
+      this.start();
+    }
+  }
+
+  // ------------------------------------------------------------------- play
+  private stepPlay(dtReal: number) {
+    const p = this.player;
+
+    if (this.input.takePause()) {
+      this.state = 'paused';
+      this.audio.setRunning(false);
+      return;
+    }
+
+    this.aiming = this.input.holding && !p.striking;
+    if (this.aiming) this.hasHeld = true;
+
+    // --- time dilation. Target is chosen in one place so aim-slow, impact-slow
+    //     and normal time can never fight each other.
+    const dry = p.focus <= 0;
+    const base = p.striking ? 1 : this.aiming ? (dry ? AIM_TIMESCALE_DRY : AIM_TIMESCALE) : 1;
+    const target = base * this.juice.slowScale;
+    // Asymmetric: ease *into* slow motion so the world settles, snap *out* of it
+    // so the strike leaves at full speed on the very first frame. A symmetric
+    // curve spends the first tenth of every strike accelerating, and that is
+    // precisely the tenth that is supposed to feel violent.
+    const ease = target > this.timeScale ? TIMESCALE_EASE * 0.28 : TIMESCALE_EASE;
+    this.timeScale = damp(this.timeScale, target, 1 / ease, dtReal);
+    this.aimBlend = damp(this.aimBlend, this.aiming ? 1 : 0, 14, dtReal);
+
+    const dt = dtReal * this.timeScale;
+    this.runTime += dtReal;
+
+    // --- focus burns on REAL time. Charging in dilated time would otherwise be
+    //     nearly free, and the whole economy would collapse.
+    if (this.aiming) {
+      p.focus = Math.max(0, p.focus - FOCUS_DRAIN * dtReal);
+    } else if (!p.striking) {
+      p.focus = Math.min(FOCUS_MAX, p.focus + FOCUS_REGEN * dtReal);
+    }
+
+    p.tick(dtReal, this.aiming);
+
+    // --- aim
+    if (!p.striking) {
+      this.aimAngle = this.input.aimAngleFrom(p.x, p.y);
+      if (this.input.pointerActive) this.input.syncKeyAngle(this.aimAngle);
+      this.aim = solveStrike(this.swarm, p.x, p.y, this.aimAngle, 0);
+    } else {
+      this.aim = null;
+    }
+
+    // --- commit. A release that lands during the strike cooldown is buffered
+    //     rather than dropped: releasing a fraction too early is the single most
+    //     common input mistake, and eating the input teaches the player that the
+    //     game is unresponsive rather than that they were early.
+    if (this.input.takeRelease()) this.strikeBuffer = 0.16;
+    if (this.strikeBuffer > 0) {
+      this.strikeBuffer -= dtReal;
+      if (p.canStrike) {
+        this.strikeBuffer = 0;
+        this.launch();
       }
     }
 
-    return finalY;
-  }
-
-  private onBreak(b: Block) {
-    const p = this.player;
-    b.dead = true;
-    this.breaks++;
-
-    const marginal = this.heat.marginality(b.material);
-    p.vy *= this.heat.melting ? 1 : lerp(BREAK_KEEP_EASY, BREAK_KEEP_HARD, marginal);
-
-    // Going through material heats you. This is the keystone: ploughing is what
-    // drives you into the redline, so the hold-the-dive line cooks itself.
-    this.heat.addBreak(b.material);
-
-    this.chain++;
-    this.chainTimer = CHAIN_TIMEOUT;
-    if (this.chain > this.bestChain) this.bestChain = this.chain;
-    this.bonus += SCORE_PER_BREAK * this.mult;
-
-    if (this.chain > 0 && this.chain % CHAIN_HEAL_AT === 0) {
-      const healed = p.health < MAX_HEALTH;
-      p.health = Math.min(MAX_HEALTH, Math.floor(p.health) + 1);
-      this.juice.addFlash(0.16);
-      this.popup(
-        p.x,
-        p.y - 34,
-        healed ? '+1 HULL' : `x${this.chain}`,
-        healed ? 'heal' : 'chain',
-        true,
-      );
-      if (healed) this.audio.onHeal();
-    } else if (this.chain >= 5 && this.chain % 5 === 0) {
-      this.popup(p.x, p.y - 30, `x${this.chain}`, 'chain', true);
-    }
-
-    // Feedback scales with significance, not chain length.
-    this.particles.shards(
-      b.x + b.w * 0.5,
-      b.y + b.h * 0.5,
-      p.vy,
-      b.gate ? 26 : Math.round(lerp(5, 16, marginal)),
-      this.rng,
-      this.heat.melting ? 'molten' : 'cool',
-    );
-    if (marginal > 0.6 || b.gate || this.heat.melting) {
-      this.particles.ring(b.x + b.w * 0.5, b.y + b.h * 0.5, b.gate ? 0.9 : 0.5);
-    }
-    this.juice.addHitstop(lerp(0.004, 0.05, marginal) + (b.gate ? 0.03 : 0));
-    this.juice.addShake(lerp(2, 12, marginal) + (b.gate ? 9 : 0));
-    this.juice.addPunch(lerp(0.004, 0.02, marginal) + (b.gate ? 0.02 : 0));
-    this.audio.onBreak(this.chain, marginal, b.material, b.gate);
-
-    if (b.gate) {
-      this.juice.addSlowmo(0.2);
-      this.juice.addFlash(0.24);
-    }
-  }
-
-  private onBounce(b: Block) {
-    const p = this.player;
-
-    // Dump most of the speed, but keep FALLING.
-    //
-    // This used to throw the player upward, and that single line produced an
-    // unrecoverable death spiral: the reversal cost all velocity, velocity is
-    // what makes heat, heat is what melts material — so one bounce off a plate
-    // dropped you below the plate threshold and every subsequent plate bounced
-    // you too, four hull in three seconds. Staying on the way down means the
-    // i-frame window is spent re-accelerating instead of climbing back to zero.
-    p.vy = Math.max(BOUNCE_MIN_VY, p.vy * BOUNCE_SPEED_KEEP);
-
-    // Chip it so a run can never deadlock against a wall it cannot melt. You
-    // always have a way through; it just costs hull to buy it.
-    const softened = World.chip(b);
-
-    this.chain = 0;
-    this.audio.onBounce();
-
-    if (p.iframe <= 0) {
-      p.health = Math.floor(p.health) - 1;
-      p.iframe = IFRAME_TIME;
-      this.juice.addShake(18);
-      this.juice.addFlash(0.42);
-      this.juice.addHitstop(0.1);
-      this.juice.addPunch(0.045);
-      this.particles.shards(p.x, b.y, -200, 18, this.rng, 'hot');
-      this.particles.ring(p.x, b.y, 0.7);
-      this.popup(p.x, p.y - 30, softened ? 'CRACKED IT' : 'TOO COLD', 'fail', true);
+    // --- movement
+    if (p.striking) {
+      const done = p.advanceStrike(dt, this.hitBuf);
+      for (const idx of this.hitBuf) this.resolveHit(idx);
+      if (done) this.finishStrike();
     } else {
-      this.juice.addShake(6);
-      this.juice.addHitstop(0.03);
+      p.drift(dt, this.aimAngle);
+    }
+
+    // --- world
+    this.swarm.targetX = p.x;
+    this.swarm.targetY = p.y;
+    this.swarm.firedOrbs = 0;
+    this.swarm.lancerMarks = 0;
+    this.swarm.lancerCharges = 0;
+    this.swarm.update(dt);
+    if (this.swarm.lancerMarks) this.audio.onLancerMark();
+    if (this.swarm.lancerCharges) this.audio.onLancerCharge();
+    if (this.swarm.firedOrbs) this.audio.onOrb();
+
+    if (this.waveCard > 0) this.waveCard -= dtReal;
+    if (this.waveClear > 0) this.waveClear -= dtReal;
+    for (let i = this.hints.length - 1; i >= 0; i--) {
+      this.hints[i].life -= dtReal;
+      if (this.hints[i].life <= 0) this.hints.splice(i, 1);
+    }
+    // Lessons run one at a time, in the order they become relevant: how to move
+    // before what the resource does. Two prompts sharing the same patch of
+    // screen is how a tutorial turns into noise.
+    if (this.moveTaught > 0) {
+      this.moveTaught -= dtReal;
+      if (this.moveTaught <= 0 && this.focusPending) {
+        this.focusPending = false;
+        this.focusTaught = HINT_CARD_TIME;
+      }
+    } else if (this.focusTaught > 0) {
+      this.focusTaught -= dtReal;
+    }
+
+    this.director.update(dt, this.swarm, this.rng, p.x, p.y);
+    this.noticeNewKinds();
+
+    // --- damage
+    if (!p.striking && p.iframe <= 0) this.checkContact();
+
+    // --- wave flow
+    if (this.breather > 0) {
+      this.breather -= dtReal;
+      if (this.breather <= 0) this.nextWave();
+    } else if (this.director.emptied && this.swarm.liveCount === 0) {
+      this.clearWave();
+    }
+
+    // --- combo decay
+    if (this.combo > 1) {
+      this.comboTimer -= dtReal;
+      if (this.comboTimer <= 0) {
+        this.combo = 1;
+        this.audio.onComboLost();
+      }
+    }
+
+    this.stepPopups(dt);
+    this.particles.update(dt);
+    this.audio.setIntensity(this.timeScale, p.speedNorm, this.combo, this.inDanger);
+
+    if (p.hull <= 0) this.die();
+  }
+
+  private stepPopups(dt: number) {
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const q = this.popups[i];
+      q.life -= dt;
+      q.y += q.vy * dt;
+      q.vy *= Math.exp(-3.2 * dt);
+      if (q.life <= 0) this.popups.splice(i, 1);
     }
   }
 
-  /** True while the hull is burning — drives the HUD alarm state. */
-  get burning() {
-    return this.heat.value >= HEAT_REDLINE && !this.heat.melting;
+  private pushPopup(
+    x: number,
+    y: number,
+    text: string,
+    sub: string,
+    kind: PopupKind,
+    col: RGB,
+    scale = 1,
+  ) {
+    if (this.popups.length > 22) this.popups.shift();
+    const max = kind === 'multi' ? 1.25 : 0.72;
+    this.popups.push({
+      x: clamp(x, 90, view.arenaW - 90),
+      y: clamp(y, 60, view.arenaH - 60),
+      vy: kind === 'multi' ? -34 : -66,
+      text,
+      sub,
+      kind,
+      col,
+      life: max,
+      max,
+      scale,
+    });
+  }
+
+  // ------------------------------------------------------------------ strike
+  private launch() {
+    const p = this.player;
+    const plan = clonePlan(solveStrike(this.swarm, p.x, p.y, this.aimAngle, 0));
+    const first = !this.hasStruck;
+    p.begin(plan);
+    this.hasStruck = true;
+    // The single most important thing a new player has to be told, and the one
+    // thing no amount of watching the ship will make obvious: there is no other
+    // movement. Everything you do to reposition is a strike.
+    if (first && this.runs < 3) this.moveTaught = 3.4;
+
+    this.audio.onStrike(plan.hits.length);
+    this.juice.addPunch(0.05 + Math.min(0.06, plan.kills * 0.014));
+    this.juice.addKick(plan.dx, plan.dy, 7);
+    this.juice.addFringe(0.5);
+    this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, COL.strike, 10, this.rng);
+    this.particles.ring(p.x, p.y, COL.strike, 74, 0.3, 3);
+  }
+
+  private resolveHit(index: number) {
+    const p = this.player;
+    const plan = p.plan;
+    if (!plan) return;
+    const hit = plan.hits[index];
+
+    if (hit.blocked && hit.enemy) {
+      this.onBlocked(hit.enemy, hit.x, hit.y);
+      return;
+    }
+
+    if (hit.enemy) this.killEnemy(hit.enemy, plan.dx, plan.dy, true);
+    else if (hit.orb) this.killOrb(hit.orb, plan.dx, plan.dy);
+  }
+
+  private killEnemy(e: Enemy, dx: number, dy: number, byStrike: boolean) {
+    if (!e.alive) return;
+    e.alive = false;
+    const spec = SPECS[e.kind];
+    const col = ENEMY_COL[e.kind];
+
+    this.kills++;
+    const gain = Math.round(spec.score * this.combo);
+    this.score += gain;
+    this.combo = Math.min(COMBO_CAP, this.combo + 1);
+    this.bestCombo = Math.max(this.bestCombo, this.combo);
+    this.comboTimer = COMBO_TIMEOUT;
+    this.player.focus = Math.min(FOCUS_MAX, this.player.focus + FOCUS_PER_KILL);
+
+    if (byStrike) this.player.strikeKills++;
+
+    if (e.kind === 'seeder') this.swarm.burst(e, this.rng);
+
+    const power = e.kind === 'spine' ? 1.5 : e.kind === 'mote' ? 0.9 : 1.2;
+    const ang = Math.atan2(dy, dx);
+    this.particles.burst(e.x, e.y, col, Math.round(20 * power) + 12, power, this.rng);
+    this.particles.ring(e.x, e.y, col, 96 * power, 0.42, 3.4);
+    this.particles.ring(e.x, e.y, COL.playerCore, 46 * power, 0.24, 2.2);
+    this.particles.plate(e.x, e.y, ang, COL.playerCore, 150 * power);
+    // Spall thrown along the strike axis: debris should look like it was
+    // knocked off by something travelling through, not like a firework.
+    this.particles.spall(e.x, e.y, ang, col, 10, this.rng);
+    this.pushPopup(e.x, e.y - e.r - 12, `+${gain}`, '', 'score', col, 0.72);
+
+    // Hitstop shrinks as a chain grows: the first kill should land like a
+    // hammer, the fifth should feel like the line is simply not stopping.
+    const n = this.player.strikeKills;
+    this.juice.addHitstop(Math.max(0.014, 0.05 - n * 0.006));
+    this.juice.addShake(6 + Math.min(10, n * 1.6));
+    this.juice.addFlash(0.1 + Math.min(0.16, n * 0.03), col);
+    this.juice.addFringe(0.35);
+    this.audio.onKill(e.kind, n, this.combo);
+
+    if (this.runs < 3 && this.kills === 1) {
+      if (this.moveTaught > 0) this.focusPending = true;
+      else this.focusTaught = HINT_CARD_TIME;
+    }
+  }
+
+  private killOrb(o: { x: number; y: number; alive: boolean }, dx: number, dy: number) {
+    if (!o.alive) return;
+    o.alive = false;
+    this.score += Math.round(40 * this.combo);
+    this.player.focus = Math.min(FOCUS_MAX, this.player.focus + FOCUS_PER_KILL * 0.35);
+    this.particles.burst(o.x, o.y, COL.spine, 10, 0.7, this.rng);
+    this.particles.ring(o.x, o.y, COL.spine, 34, 0.26, 2);
+    this.particles.plate(o.x, o.y, Math.atan2(dy, dx), COL.playerCore, 54);
+    this.juice.addHitstop(0.01);
+    this.juice.addShake(3);
+    this.audio.onOrbPop();
+  }
+
+  private onBlocked(e: Enemy, x: number, y: number) {
+    const p = this.player;
+    p.travelled = p.plan ? p.plan.dist : p.travelled;
+    p.stun = 0.34;
+    e.flash = 1;
+
+    const away = Math.atan2(p.y - e.y, p.x - e.x);
+    p.vx = Math.cos(away) * 430;
+    p.vy = Math.sin(away) * 430;
+
+    this.juice.addHitstop(0.1);
+    this.juice.addShake(15);
+    this.juice.addFlash(0.3, COL.ward);
+    this.juice.addPunch(0.05);
+    this.juice.addKick(Math.cos(away), Math.sin(away), 9);
+    this.particles.ring(x, y, COL.ward, 96, 0.42, 4);
+    this.particles.spall(x, y, away, COL.ward, 16, this.rng);
+    this.pushPopup(x, y - 40, 'BLOCKED', 'FLANK IT', 'bad', COL.ward);
+    this.audio.onBlocked();
+  }
+
+  private finishStrike() {
+    const p = this.player;
+    const plan = p.plan;
+    const n = p.strikeKills;
+
+    if (plan && plan.hitWall && !plan.blocked) {
+      this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, COL.wall, 12, this.rng);
+      this.juice.addShake(6);
+      this.audio.onWall();
+    }
+
+    if (n >= 2) {
+      const bonus = 100 * n * (n - 1);
+      this.score += bonus;
+      this.bestMulti = Math.max(this.bestMulti, n);
+      const name = MULTI_NAMES[Math.min(n - 2, MULTI_NAMES.length - 1)];
+      this.pushPopup(p.x, p.y - 54, name, `+${bonus}`, 'multi', COL.playerCore, 1 + n * 0.06);
+      this.juice.addFlash(0.16 + n * 0.05, COL.strike);
+      this.juice.addSlowmo(Math.min(0.34, 0.1 + n * 0.05));
+      this.juice.addShake(10 + n * 2);
+      this.audio.onMulti(n);
+    }
+
+    p.endStrike();
+  }
+
+  // ---------------------------------------------------------------- contact
+  private checkContact() {
+    const p = this.player;
+    for (const e of this.swarm.list) {
+      if (!e.alive || e.spawn > 0) continue;
+      const r = e.r + PLAYER_R * 0.8;
+      if ((p.x - e.x) ** 2 + (p.y - e.y) ** 2 < r * r) {
+        this.hurt(e.x, e.y, ENEMY_COL[e.kind]);
+        return;
+      }
+    }
+    for (const o of this.swarm.orbs) {
+      if (!o.alive) continue;
+      const r = ORB_R + PLAYER_R * 0.8;
+      if ((p.x - o.x) ** 2 + (p.y - o.y) ** 2 < r * r) {
+        o.alive = false;
+        this.particles.burst(o.x, o.y, COL.spine, 12, 0.8, this.rng);
+        this.hurt(o.x, o.y, COL.spine);
+        return;
+      }
+    }
+  }
+
+  private hurt(fromX: number, fromY: number, col: RGB) {
+    const p = this.player;
+    p.hull--;
+    p.iframe = IFRAME_TIME;
+    this.combo = 1;
+
+    const a = Math.atan2(p.y - fromY, p.x - fromX);
+    p.vx = Math.cos(a) * HURT_KNOCKBACK;
+    p.vy = Math.sin(a) * HURT_KNOCKBACK;
+
+    this.juice.addHitstop(0.12);
+    this.juice.addShake(22);
+    this.juice.addFlash(0.55, COL.danger);
+    this.juice.addPunch(0.09);
+    this.juice.addSlowmo(0.3);
+    this.juice.addKick(Math.cos(a), Math.sin(a), 14);
+    this.particles.burst(p.x, p.y, COL.danger, 26, 1.2, this.rng);
+    this.particles.ring(p.x, p.y, COL.danger, 150, 0.5, 5);
+    this.particles.ring(p.x, p.y, col, 92, 0.4, 3);
+    this.pushPopup(p.x, p.y - 46, `-1 HULL`, '', 'bad', COL.danger, 1.05);
+    this.audio.onHurt(p.hull);
+  }
+
+  // ------------------------------------------------------------------ waves
+  private clearWave() {
+    const bonus = WAVE_CLEAR_BONUS * this.wave;
+    this.score += bonus;
+    this.waveClear = 1.6;
+    this.breather = WAVE_BREATHER;
+    // Any orbs still in the air are swept, so a wave never ends on a stray shot.
+    for (const o of this.swarm.orbs) {
+      if (!o.alive) continue;
+      o.alive = false;
+      this.particles.burst(o.x, o.y, COL.spine, 8, 0.6, this.rng);
+    }
+    this.pushPopup(
+      view.arenaW * 0.5,
+      view.arenaH * 0.42,
+      `WAVE ${pad(this.wave)} CLEAR`,
+      `+${bonus}`,
+      'wave',
+      COL.hull,
+      1.15,
+    );
+    this.juice.addFlash(0.2, COL.hull);
+    this.audio.onWaveClear();
+  }
+
+  /** Queue a rule card the first time a species shows up in this run. */
+  private noticeNewKinds() {
+    for (const e of this.swarm.list) {
+      if (!e.alive) continue;
+      if (this.seenKinds.has(e.kind)) continue;
+      this.seenKinds.add(e.kind);
+      if (e.kind === 'mote') continue; // the tutorial already covers these
+      this.hints.push({ kind: e.kind, life: HINT_CARD_TIME });
+      this.audio.onHint();
+    }
+  }
+
+  /** Bonus range the current aim would earn — used to draw the chain preview. */
+  get aimBonusRange() {
+    return this.aim ? this.aim.kills * STRIKE_RANGE_PER_KILL : 0;
+  }
+
+  /** 0..1 alarm pulse, shared by HUD and post so they beat together. */
+  get alarm() {
+    return this.inDanger ? 0.5 + 0.5 * Math.sin(this.clock * 7) : 0;
+  }
+
+  /** Angle used for cosmetic flourishes that need a "forward". */
+  get facing() {
+    return this.player.striking ? this.player.angle : this.aimAngle;
+  }
+
+  get comboFrac() {
+    return this.combo > 1 ? clamp(this.comboTimer / COMBO_TIMEOUT, 0, 1) : 0;
+  }
+
+  get waveProgress() {
+    const total = Math.max(1, this.director.planned);
+    const left = this.swarm.liveCount + (total - this.director.spawned);
+    return clamp(1 - left / total, 0, 1);
+  }
+
+  /** Ambient drift for the background field, independent of the sim clock. */
+  get drift() {
+    return (this.clock * 0.06) % TAU;
+  }
+
+  /**
+   * The arena changes shape when the window does. Everything in flight is
+   * remapped proportionally rather than clamped, so a mid-run resize never
+   * dumps the swarm into a corner or strands the player outside the walls.
+   */
+  onResize(prevW: number, prevH: number) {
+    if (prevW <= 0 || prevH <= 0) return;
+    const sx = view.arenaW / prevW;
+    const sy = view.arenaH / prevH;
+    if (Math.abs(sx - 1) < 1e-4 && Math.abs(sy - 1) < 1e-4) return;
+
+    const p = this.player;
+    p.x *= sx;
+    p.y *= sy;
+    if (p.plan) {
+      // A strike solved against the old arena is no longer meaningful; land it.
+      p.endStrike();
+    }
+    for (const e of this.swarm.list) {
+      e.x *= sx;
+      e.y *= sy;
+    }
+    for (const o of this.swarm.orbs) {
+      o.x *= sx;
+      o.y *= sy;
+    }
+    for (const q of this.popups) {
+      q.x *= sx;
+      q.y *= sy;
+    }
+    p.trail.length = 0;
   }
 }
 
-const byY = (a: Block, b: Block) => a.y - b.y;
+export const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+export { RANKS };

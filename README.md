@@ -1,16 +1,44 @@
-# BREAKNECK
+# AFTERBURN
 
-*Speed is the only thing that cuts.*
+*Speed is the only weapon you have.*
 
-A vertical fall-smasher for **Micro Jam 062** (theme: *Speed*, prerequisite:
-*Speed is your weapon!*).
+An arena game for **Micro Jam 062** (theme: *Speed*, prerequisite:
+*Speed is your weapon!*). Pure HTML5 canvas, no assets, no dependencies at
+runtime — the whole game ships as one self-contained `index.html`.
 
-Diving builds **HEAT**. Heat is what melts through barriers, heat is your score
-multiplier, and past the redline heat burns your hull. One resource, three jobs.
+## The idea
 
-Barriers are made of something — glass, grate, plate, core — read by texture and
-opacity, never by a number. Anything your current heat can melt glows and softens;
-anything it cannot is cold and hazard-striped. No arithmetic, just looking.
+You cannot walk. You cannot shoot. You can only **strike**: a blinding
+straight-line burst that kills whatever it passes through.
+
+**Hold** to aim, and the world drops into bullet time. A line extends from your
+ship showing exactly what the strike will hit, in the order it will hit it, and
+exactly where it will stop. **Release**, and you become that line.
+
+That preview is the whole design. The old failure mode of a fast game is that it
+is unreadable; here, the player controls the tempo and is *shown the outcome
+before committing to it*. Speed stops being chaos and becomes a decision.
+
+The cost is **FOCUS**. Aiming drains it in real time; kills refill it. Run dry
+and the world stops slowing down for you — you can still strike, you just have to
+do it at full speed. Aggression buys thinking time. Hesitation spends it.
+
+## Enemies
+
+One rule, one exception.
+
+| | |
+|---|---|
+| **MOTE** | Drifts toward you. Anything on your line dies. |
+| **SEEDER** | Bursts into three Motes when it dies. |
+| **WARD** | Its shield turns to face you. Strike the flank. |
+| **LANCER** | Marks a line, then charges down it. Get off the line. |
+| **SPINE** | Rooted gun. Its orbs sit on your line like anything else. |
+
+Each one introduces itself with a one-line rule card the first time it appears.
+The WARD is the exception to "everything on the line dies" — and the aim preview
+shows the block in red *before* you commit, so the lesson costs you a beat of
+tempo, never a hull point you did not see coming.
 
 ## Run it
 
@@ -18,7 +46,7 @@ anything it cannot is cold and hazard-striped. No arithmetic, just looking.
 npm install && npm run dev
 ```
 
-Production build (a single self-contained `dist/index.html`):
+Production build — one self-contained `dist/index.html`, ~27 kB gzipped:
 
 ```bash
 npm run build
@@ -26,84 +54,61 @@ npm run build
 
 ## Controls
 
-`W` dive · `A`/`D` steer · `S` vent · `Space` restart · `M` mute.
-Touch: left/right thirds steer, middle dives, bottom vents.
+| | |
+|---|---|
+| Mouse | aim at the cursor · **hold left button** to charge · release to strike |
+| Keyboard | **WASD** / arrows steer the reticle · **hold Space** or **Shift** · release |
+| Touch | touch anywhere to aim through that point · release to strike |
+| | `P` / `Esc` pause · `M` mute |
 
-## The loop
+## How the theme is used
 
-- **Dive** to build heat. Your hull runs dark when cold, then ember, orange, and
-  white-hot — the ship *is* the gauge.
-- **Melt** what your heat can reach. Smashing dumps more heat into you, so
-  ploughing a soft gauntlet is what pushes you toward the redline.
-- **Vent** with `S` before the burn eats your hull — but venting costs the heat
-  that is also your multiplier and your melting power.
-- **MELTDOWN** at maximum heat: four seconds where nothing can hurt you and even
-  CORE walls open. It is bought with roughly a hull pip of burn, and it drops you
-  out still hot — right back at the decision.
-- **Descend through zones**, each 700m, each with its own palette, background and
-  name card: the Approach, the Foundry, the Cryoshaft, the Reactor, the Deep
-  Void, then round again deeper.
-- **Get ranked** D through SS.
+Theme and prerequisite are the same system, not two features bolted together.
+Your velocity *is* the weapon — there is no other damage source in the game — and
+the contrast between bullet-time aiming and a 3000-unit-per-second strike is what
+makes that velocity legible as power rather than as noise.
 
-## How it's built
+## Architecture
 
-No engine. TypeScript on a 2D canvas, zero runtime dependencies, one ~60KB HTML
-file (20KB gzipped).
+```
+src/
+  main.ts          fixed-120Hz loop, canvas sizing, dev hooks
+  viewport.ts      constant-area arena; aspect follows the window
+  config.ts        every tunable, one file
+  engine/
+    math.ts        easing, damping, seeded RNG, segment math
+    input.ts       polled mouse / keyboard / touch
+    juice.ts       hitstop, shake, flash, lens punch
+    particles.ts   fixed-capacity additive pool
+    audio.ts       procedural WebAudio, incl. the bullet-time music warp
+  game/
+    strike.ts      the solver — runs the preview and the strike itself
+    enemies.ts     five behaviours, one shared pool
+    waves.ts       twelve authored waves, then procedural
+    player.ts      two-state machine: drift / strike
+    game.ts        rules, scoring, wave flow, teaching
+  render/
+    glyphs.ts      bespoke vector display typeface
+    text.ts        vector + system type setting
+    scene.ts       arena, entities, aim preview
+    hud.ts         crisp screen-space HUD
+    screens.ts     title, pause, results
+    postfx.ts      bloom, chromatic aberration, grain
+    renderer.ts    frame assembly
+```
 
-- **`src/config.ts`** — every feel-critical constant. Tuning happens here, not
-  scattered through the code.
-- **Physics is drag-based, not thrust-based.** Posture changes your frontal area
-  like a skydiver's; terminal velocity falls out of `sqrt(GRAVITY / drag)`.
-- **The thermal equilibrium is the most important number in the game.** Heat gain
-  is quadratic in speed against a constant passive vent, and they balance at a
-  speed *above* the neutral-posture terminal and below the tuck terminal. So a
-  player who does nothing cools, goes cold, and cannot melt anything. Heat has to
-  be actively dived for.
-- **Smashing heats you.** This is what killed "hold W": the strategy that breaks
-  the most material is the one that cooks itself fastest.
-- **Marginality weighs material toughness, not just headroom.** Glass melts at
-  zero heat, so a cold player has no headroom over it — scoring that as a
-  maximally marginal break made every pane cost 13% of velocity, and ploughing
-  the gauntlets that are supposed to *build* heat instead bled it away.
-- **The playfield fills the window.** Vertical lookahead is pinned, because
-  visible depth is literally reaction time — scale to fit the width and a
-  widescreen monitor gets half the reaction time of a phone. So the canvas scales
-  by *height* and leftover width becomes extra lanes (7–14). Lane width stays
-  near-constant, and the ship and every steering speed are expressed as fractions
-  of a lane, so a 7-lane phone and a 14-lane monitor play identically.
-- **The generator emits formations, not rows.** Independent per-column coin flips
-  produce statistically correct mush — every row looks like every other one and
-  the only skill is reacting to noise. Named shapes (a wall with one gap, a
-  drifting corridor, a walking diagonal, a soft gauntlet built to be ploughed)
-  give the player something to read ahead and get better at. Every lane count is
-  a fraction of the field, never an absolute.
-- **CORE is the reason steering exists.** It cannot be melted without a meltdown,
-  so it is the one thing that must always be gone around.
-- **A bounce keeps you falling.** Reversing velocity on a failed impact cost all
-  your speed, which cost your heat, which cost your ability to melt the next
-  barrier — four hull in three seconds with no way out.
-- **Collision is swept** over the vertical span travelled each step, because at
-  1800 px/s a discrete check tunnels straight through barriers.
-- **Fixed 120Hz sim** with an accumulator, so feel is identical on a 60Hz laptop
-  and a 144Hz monitor.
-- **Real post-processing.** The playfield renders into an offscreen buffer sized
-  to the viewport, then gets a downscale-blur-add bloom pass, channel-split
-  chromatic aberration, film grain and scanlines. Emissive art on a near-black
-  field is what makes the additive pass behave like light rather than a blur.
-- **All audio is synthesised at runtime** via Web Audio — no files. Break sounds
-  walk up a minor-pentatonic scale as the chain grows and sit lower for tougher
-  material; the redline gets a continuous tremolo alarm; meltdown shifts the whole
-  sequencer up a gear.
+Two details worth knowing:
 
-Balance was calibrated against scripted bots rather than guessed — one holding the
-dive, one pressing nothing, one running a heat thermostat and steering around what
-it cannot melt. The thermostat bot has to win and holding the dive has to be the
-*fastest way to die*. Both are now true; both were false at the first three tuning
-passes. `__advance()` and `__render()` are exposed on `window` in dev builds for
-exactly this, because headless/backgrounded tabs never fire `requestAnimationFrame`.
+- **`strike.ts` is run twice per frame's worth of intent** — once to draw the
+  preview and once to execute. It is deliberately one function, because two
+  implementations would eventually disagree, and the moment a player is shown
+  three kills and dealt two is the moment they stop trusting the only thing the
+  game asks them to trust.
+- **The display face is vector data, not a webfont.** It ships inside the bundle,
+  renders identically everywhere, and can be drawn on progressively — which is
+  where the title sequence comes from.
 
-## Shipping
+## Credits
 
-`ITCH_PAGE.md` has the page copy and the exact upload settings. The build is
-deliberately a **single `index.html`** — a zip made on Windows can carry backslash
-separators that break nested asset paths once itch.io unpacks it.
+Built by Leonardo Diaz for Micro Jam 062. Everything — art, typeface, music,
+sound — is generated at runtime from code in this repository.

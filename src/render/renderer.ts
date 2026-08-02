@@ -1,55 +1,75 @@
+import { COL, rgba } from '../config';
+import { TAU, clamp } from '../engine/math';
 import type { Game } from '../game/game';
 import { view } from '../viewport';
 import { drawHud } from './hud';
 import { PostFX } from './postfx';
-import { drawScene, effectivePalette } from './scene';
-import { drawDead, drawTitle } from './screens';
+import { drawScene } from './scene';
+import { drawScreens } from './screens';
 
 /**
- * Frame orchestration.
+ * Frame assembly, in the order that matters:
  *
- * Four passes, in this order, because each depends on the last:
- *
- *   1. scene      — the playfield, into an offscreen buffer at viewport aspect
- *   2. composite  — that buffer blitted back with bloom and chromatic split
- *   3. hud        — drawn straight onto the canvas so it stays sharp
- *   4. finish     — grain and scanlines over everything
- *
- * There is no longer a surround pass: the playfield fills the window, so the
- * exterior it used to draw has nowhere to be. Its parallax motifs now live in
- * the scene's background layers.
+ *   world  -> offscreen buffer (gets bloom, fringe, shake, lens punch)
+ *   HUD    -> real canvas      (crisp: never post-processed)
+ *   screens-> real canvas
+ *   grain  -> everything
+ *   cursor -> above all of it
  */
 
 const fx = new PostFX();
 
 export function render(ctx: CanvasRenderingContext2D, game: Game) {
-  const melt = game.heat.meltIntensity;
-  const pal = effectivePalette(game.palette, melt);
-  const speed = game.state === 'title' ? 0.42 : game.player.speedNorm;
-  const burn = game.state === 'play' && game.burning ? game.heat.overload : 0;
-
-  // --- 1. playfield, offscreen
-  drawScene(fx.begin(), game, pal);
-
-  // --- 2. composite with post, filling the canvas
   ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
-  fx.composite(ctx, { w: view.w, h: view.h, speed, melt, burn });
 
-  // --- 3. hud and overlays, in logical units
-  const s = view.scale * view.dpr;
-  ctx.setTransform(s, 0, 0, s, 0, 0);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
+  const scene = fx.begin(game);
+  drawScene(scene, game);
 
-  drawHud(ctx, game, pal);
-  if (game.state === 'title') drawTitle(ctx, game, pal);
-  else if (game.state === 'dead') drawDead(ctx, game, pal);
+  fx.composite(ctx, game);
+  if (game.state === 'play' || game.state === 'paused') drawHud(ctx, game);
+  drawScreens(ctx, game);
+  fx.finish(ctx, game);
+  drawCursor(ctx, game);
+}
 
-  // --- 4. film pass over the whole window
-  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
-  fx.finish(ctx, view.w, view.h, speed, melt);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
+/**
+ * A custom reticle. The native arrow cursor is the single loudest reminder that
+ * a canvas game is a web page, and hiding it costs nothing.
+ */
+function drawCursor(ctx: CanvasRenderingContext2D, game: Game) {
+  if (!game.input.pointerActive) return;
+  const x = game.input.cursorScreenX();
+  const y = game.input.cursorScreenY();
+  if (!isFinite(x) || !isFinite(y)) return;
+
+  const S = clamp(view.h / 860, 0.7, 1.5);
+  const held = game.input.holding;
+  const spin = game.clock * (held ? 2.6 : 0.9);
+  const r = (held ? 15 : 11) * S;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = rgba(held ? COL.playerCore : COL.strike, held ? 0.95 : 0.7);
+  ctx.lineWidth = 1.8 * S;
+
+  // Three arcs orbiting a dot: reads as a targeting device, and the spin rate
+  // is a free second channel telling the player the aim is live.
+  for (let i = 0; i < 3; i++) {
+    const a = spin + (i / 3) * TAU;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, a, a + 0.85);
+    ctx.stroke();
+  }
+  ctx.fillStyle = rgba(COL.playerCore, 0.9);
+  ctx.fillRect(-1.4 * S, -1.4 * S, 2.8 * S, 2.8 * S);
+
+  if (held) {
+    ctx.strokeStyle = rgba(COL.strike, 0.5);
+    ctx.lineWidth = 1 * S;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.7, 0, TAU);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
