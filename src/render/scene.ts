@@ -92,6 +92,105 @@ function unitPoly(
   ctx.restore();
 }
 
+/**
+ * Light the body from the one light in the room.
+ *
+ * Each edge is stroked bright or dim depending on whether its outward normal
+ * faces the player. That is real shading logic rather than decoration, and it
+ * is the single change that stops these reading as outlines and starts them
+ * reading as solids: an outline has one uniform weight all the way round, and
+ * nothing in a lit world does.
+ *
+ * `lightLocal` is the direction to the player expressed in the body's own
+ * rotated frame, so the highlight stays put on the side facing the ship while
+ * the body spins underneath it.
+ */
+function rimPoly(
+  ctx: CanvasRenderingContext2D,
+  pts: [number, number][],
+  s: number,
+  fill: string,
+  dim: string,
+  lit: string,
+  lw: number,
+  lightLocal: number,
+) {
+  const lx = Math.cos(lightLocal);
+  const ly = Math.sin(lightLocal);
+  ctx.save();
+  ctx.scale(s, s);
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  // Two passes, so each is a single stroke call rather than one per edge.
+  for (let pass = 0; pass < 2; pass++) {
+    ctx.beginPath();
+    let any = false;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      // Outward normal, disambiguated against the body centre rather than
+      // assuming a winding order — the outlines are authored by eye and two of
+      // them wind the other way.
+      let nx = b[1] - a[1];
+      let ny = -(b[0] - a[0]);
+      const mx = (a[0] + b[0]) * 0.5;
+      const my = (a[1] + b[1]) * 0.5;
+      if (nx * mx + ny * my < 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+      const facing = nx * lx + ny * ly > 0;
+      if (facing !== (pass === 1)) continue;
+      any = true;
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+    }
+    if (!any) continue;
+    ctx.strokeStyle = pass === 1 ? lit : dim;
+    ctx.lineWidth = (pass === 1 ? lw * 1.35 : lw * 0.75) / s;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * The shadow a body throws away from the player's light.
+ *
+ * Offset is small and constant — a long raked shadow would fight the aim line
+ * for the player's attention — but it is enough to lift every enemy off the
+ * floor and turn the arena from a diagram into a room with things standing in
+ * it. Drawn before the halo so the glow bleeds over its own shadow, which is
+ * what a real bloom does.
+ */
+function castShadow(
+  ctx: CanvasRenderingContext2D,
+  pts: [number, number][],
+  s: number,
+  rot: number,
+  toP: number,
+  r: number,
+  alpha: number,
+) {
+  const d = r * 0.24;
+  ctx.save();
+  ctx.translate(-Math.cos(toP) * d, -Math.sin(toP) * d);
+  ctx.rotate(rot);
+  ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = `rgba(0,0,0,${0.5 * alpha})`;
+  ctx.fill();
+  ctx.restore();
+}
+
 export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   drawBackdrop(ctx, game);
 
@@ -429,6 +528,9 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
   ctx.save();
   ctx.translate(e.x, e.y);
 
+  // Lifted off the floor before anything else touches it.
+  castShadow(ctx, UNIT[e.kind], e.r * breathe, e.kind === 'seeder' ? e.rot * 0.4 : e.rot, toP, e.r, alpha);
+
   // Every enemy gets a soft additive halo so the swarm reads as light sources
   // in a dark room rather than as decals lying on the floor.
   ctx.globalCompositeOperation = 'lighter';
@@ -442,7 +544,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       ctx.save();
       ctx.rotate(e.rot);
       const s = e.r * breathe;
-      unitPoly(ctx, UNIT.mote, s, body, rgba(col, alpha * fl), 2.2);
+      rimPoly(ctx, UNIT.mote, s, body, rgba(col, 0.5 * alpha * fl), rgba(col, alpha * fl), 2.4, toP - e.rot);
       // A hot seam down the long axis, like a coal about to split.
       ctx.strokeStyle = rgba(col, 0.85 * alpha * fl);
       ctx.lineWidth = 1.2;
@@ -456,7 +558,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       ctx.save();
       ctx.rotate(e.rot * 0.4);
       const s = e.r * breathe;
-      unitPoly(ctx, UNIT.seeder, s, body, rgba(col, 0.95 * alpha), 2.2);
+      rimPoly(ctx, UNIT.seeder, s, body, rgba(col, 0.45 * alpha), rgba(col, 0.95 * alpha), 2.4, toP - e.rot * 0.4);
       // The womb: an inner chamber counter-rotating against the hull.
       ctx.rotate(-e.rot * 2);
       unitPoly(ctx, UNIT.seeder, s * 0.5, null, rgba(col, 0.55 * alpha), 1.5);
@@ -478,7 +580,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       const r = e.r * breathe;
       ctx.save();
       ctx.rotate(e.rot);
-      unitPoly(ctx, UNIT.ward, r, body, rgba(col, 0.95 * alpha), 2.2);
+      rimPoly(ctx, UNIT.ward, r, body, rgba(col, 0.45 * alpha), rgba(col, 0.95 * alpha), 2.4, toP - e.rot);
       // Facet seams, so the hex reads as an armoured lantern rather than a tile.
       ctx.strokeStyle = rgba(col, 0.3 * alpha);
       ctx.lineWidth = 1.2;
@@ -537,7 +639,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       }
       // While marking, the whole body strobes — a weapon spinning up.
       const arm = e.state === 1 ? 0.75 + 0.25 * Math.sin(game.clock * 22) : 1;
-      unitPoly(ctx, UNIT.lancer, r, body, rgba(col, arm * alpha), 2.2);
+      rimPoly(ctx, UNIT.lancer, r, body, rgba(col, 0.45 * arm * alpha), rgba(col, arm * alpha), 2.4, toP - e.rot);
       // Engine ember at the tail; flares hard in the charge.
       ctx.globalCompositeOperation = 'lighter';
       drawRadial(
@@ -559,7 +661,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
       const r = e.r * breathe;
       ctx.save();
       ctx.rotate(e.rot);
-      unitPoly(ctx, UNIT.spine, r, body, rgba(col, 0.95 * alpha), 2.2);
+      rimPoly(ctx, UNIT.spine, r, body, rgba(col, 0.45 * alpha), rgba(col, 0.95 * alpha), 2.4, toP - e.rot);
       ctx.restore();
       // The barrel tracks you. Muzzle glint doubles as the eye.
       ctx.strokeStyle = rgba(col, 0.9 * alpha);
@@ -888,24 +990,36 @@ function drawPlayer(ctx: CanvasRenderingContext2D, game: Game) {
   const sy = 1 - p.stretch * 0.42;
   ctx.scale(sx, sy);
   const r = PLAYER_R;
+
+  // A six-point dart: long nose, shoulders, swept tail. Deliberately not the
+  // shape any enemy wears — the lancer is the other pointed thing on screen and
+  // at speed the player must never have to check which arrow is theirs.
+  const hull: [number, number][] = [
+    [r * 1.62, 0], [r * 0.24, -r * 0.44], [-r * 0.72, -r * 0.94],
+    [-r * 0.4, 0], [-r * 0.72, r * 0.94], [r * 0.24, r * 0.44],
+  ];
   ctx.fillStyle = rgba(COL.player, 0.26 * alpha);
   ctx.strokeStyle = rgba(COL.player, alpha);
   ctx.lineWidth = 2.6 / Math.max(sx, 1) + 0.6;
-  poly(ctx, [[r * 1.5, 0], [-r * 0.9, -r], [-r * 0.45, 0], [-r * 0.9, r]], true, true);
+  poly(ctx, hull, true, true);
 
-  // Cockpit vee echoing the hull line — one stroke of interior detail is the
-  // difference between a glyph and a vehicle.
-  ctx.strokeStyle = rgba(COL.playerCore, 0.55 * alpha);
-  ctx.lineWidth = 1.1;
+  // Panel lines: a spine down the axis and a shoulder crease each side. Three
+  // strokes of interior structure are the difference between a vehicle and a
+  // glyph, and they cost nothing because the ship is a single object.
+  ctx.strokeStyle = rgba(COL.playerCore, 0.42 * alpha);
+  ctx.lineWidth = 1 / Math.max(sx, 1) + 0.2;
   ctx.beginPath();
-  ctx.moveTo(-r * 0.2, -r * 0.5);
-  ctx.lineTo(r * 0.7, 0);
-  ctx.lineTo(-r * 0.2, r * 0.5);
+  ctx.moveTo(-r * 0.3, 0);
+  ctx.lineTo(r * 1.3, 0);
+  ctx.moveTo(r * 0.24, -r * 0.44);
+  ctx.lineTo(-r * 0.34, -r * 0.3);
+  ctx.moveTo(r * 0.24, r * 0.44);
+  ctx.lineTo(-r * 0.34, r * 0.3);
   ctx.stroke();
 
   ctx.fillStyle = rgba(COL.playerCore, alpha);
   ctx.beginPath();
-  ctx.arc(r * 0.12, 0, r * 0.3, 0, TAU);
+  ctx.arc(r * 0.16, 0, r * 0.28, 0, TAU);
   ctx.fill();
   ctx.restore();
 }

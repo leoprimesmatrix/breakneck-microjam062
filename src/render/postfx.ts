@@ -2,7 +2,6 @@ import { COL, rgba } from '../config';
 import { clamp } from '../engine/math';
 import type { Game } from '../game/game';
 import { view } from '../viewport';
-import { CAN_BLUR } from './glow';
 import { quality } from './quality';
 
 /**
@@ -13,11 +12,22 @@ import { quality } from './quality';
  * to the compositor. The HUD is deliberately *not* in that buffer; it is drawn
  * onto the real canvas afterwards so its text never picks up a fringe.
  *
- * Everything here degrades rather than fails. Canvas `filter` is the only exotic
- * feature used and there is a manual fallback, so no path through this file can
- * leave a judge looking at a black rectangle.
+ * **Everything happens inside that buffer, and it leaves by a single blit.**
+ * That is the whole performance story of this file. An earlier version applied
+ * each effect to the visible canvas in turn: eight full-resolution blend passes
+ * a frame, several of them reading the destination back. Measured on an M3 at
+ * 1470x956 with a 2x device ratio that was 9.7ms a frame of pure fill rate
+ * against 1.0ms of actual work — and on a fanless machine it only gets worse as
+ * the chassis warms. The buffer is 70% of the visible resolution, so the same
+ * effect costs half as much there, and a pass that never touches the real
+ * canvas is a pass the compositor never has to think about.
+ *
+ * Nothing here uses `ctx.filter`. See `glow.ts` for why that matters; the bloom
+ * below is a downsample pyramid instead, which is both cheaper and a better
+ * falloff than a single blur.
  */
 
+/** Half-size buffers for the chromatic split; the fringe is soft anyway. */
 const TINT_DIV = 2;
 /** Cap on scene-buffer pixels; a 4K window must not allocate a 33MP blur. */
 const MAX_PIXELS = 2_600_000;
@@ -29,22 +39,35 @@ function makeCanvas(w: number, h: number) {
   return c;
 }
 
+interface Level {
+  c: HTMLCanvasElement;
+  g: CanvasRenderingContext2D;
+}
+
+function makeLevel(w: number, h: number): Level {
+  const c = makeCanvas(w, h);
+  return { c, g: c.getContext('2d')! };
+}
+
 export class PostFX {
   readonly scene: HTMLCanvasElement;
   readonly sceneCtx: CanvasRenderingContext2D;
 
-  private bloom: HTMLCanvasElement;
-  private bloomCtx: CanvasRenderingContext2D;
-  private tint: HTMLCanvasElement;
-  private tintCtx: CanvasRenderingContext2D;
+  /** Bloom pyramid, coarsest last. */
+  private bloom: Level[] = [];
+  /** Two half-size buffers for the chromatic split and its accumulation. */
+  private tint: Level;
+  private ghostAcc: Level;
+
   private grain: HTMLCanvasElement;
   private grainPattern: CanvasPattern | null = null;
   private scanTile: HTMLCanvasElement | null = null;
   private scanPattern: CanvasPattern | null = null;
   private vignette: CanvasGradient | null = null;
   private vignetteKey = '';
+  private edge: CanvasGradient | null = null;
+  private edgeKey = '';
 
-  private readonly canFilter = CAN_BLUR;
   private q = 1;
   private lastW = 0;
   private lastH = 0;
@@ -54,10 +77,8 @@ export class PostFX {
   constructor() {
     this.scene = makeCanvas(2, 2);
     this.sceneCtx = this.scene.getContext('2d', { alpha: false })!;
-    this.bloom = makeCanvas(2, 2);
-    this.bloomCtx = this.bloom.getContext('2d')!;
-    this.tint = makeCanvas(2, 2);
-    this.tintCtx = this.tint.getContext('2d')!;
+    this.tint = makeLevel(2, 2);
+    this.ghostAcc = makeLevel(2, 2);
     this.grain = this.buildGrain();
   }
 
@@ -90,10 +111,24 @@ export class PostFX {
     this.lastDiv = div;
     this.scene.width = w;
     this.scene.height = h;
-    this.bloom.width = Math.max(1, Math.round(w / div));
-    this.bloom.height = Math.max(1, Math.round(h / div));
-    this.tint.width = Math.max(1, Math.round(w / TINT_DIV));
-    this.tint.height = Math.max(1, Math.round(h / TINT_DIV));
+
+    // Three pyramid levels. The coarsest is a few thousand pixels, so the whole
+    // chain costs less than one full-resolution pass used to.
+    this.bloom = [];
+    let lw = w;
+    let lh = h;
+    for (let i = 0; i < 3; i++) {
+      lw = Math.max(1, Math.round(lw / div));
+      lh = Math.max(1, Math.round(lh / div));
+      this.bloom.push(makeLevel(lw, lh));
+    }
+
+    const tw = Math.max(1, Math.round(w / TINT_DIV));
+    const th = Math.max(1, Math.round(h / TINT_DIV));
+    this.tint = makeLevel(tw, th);
+    this.ghostAcc = makeLevel(tw, th);
+    this.vignette = null;
+    this.edge = null;
   }
 
   /**
@@ -119,6 +154,7 @@ export class PostFX {
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'source-over';
+    c.filter = 'none';
     c.fillStyle = rgba(COL.void, 1);
     c.fillRect(0, 0, this.scene.width, this.scene.height);
 
@@ -134,123 +170,188 @@ export class PostFX {
   }
 
   // ---------------------------------------------------------------- bloom
-  private buildBloom(amount: number) {
-    const b = this.bloomCtx;
-    const bw = this.bloom.width;
-    const bh = this.bloom.height;
-
-    b.setTransform(1, 0, 0, 1, 0, 0);
-    b.globalCompositeOperation = 'source-over';
-    b.globalAlpha = 1;
-    b.clearRect(0, 0, bw, bh);
-
-    if (this.canFilter) {
-      b.filter = `blur(${(2.6 + amount * 2.4).toFixed(2)}px)`;
-      b.drawImage(this.scene, 0, 0, bw, bh);
-      b.filter = 'none';
-    } else {
-      // Manual box blur: the same image summed at small offsets. Cheap at 1/3
-      // resolution and visually close enough for a halo.
-      b.globalAlpha = 0.2;
-      for (let dx = -2; dx <= 2; dx++) {
-        for (let dy = -2; dy <= 2; dy += 2) b.drawImage(this.scene, dx, dy, bw, bh);
-      }
-      b.globalAlpha = 1;
+  /**
+   * A downsample pyramid, accumulated coarse-to-fine and composited once.
+   *
+   * Each level is a bilinear box average of the one above, so three levels give
+   * a soft, wide falloff that a single blur radius cannot — and the arithmetic
+   * happens on canvases of a few thousand pixels rather than a few million.
+   */
+  private buildBloom(levels: number) {
+    const n = Math.min(levels, this.bloom.length);
+    let src: HTMLCanvasElement = this.scene;
+    for (let i = 0; i < n; i++) {
+      const L = this.bloom[i];
+      L.g.setTransform(1, 0, 0, 1, 0, 0);
+      L.g.globalCompositeOperation = 'source-over';
+      L.g.globalAlpha = 1;
+      L.g.clearRect(0, 0, L.c.width, L.c.height);
+      L.g.drawImage(src, 0, 0, L.c.width, L.c.height);
+      src = L.c;
+    }
+    // Fold coarse levels down into level 0, so only one buffer is composited.
+    for (let i = n - 1; i > 0; i--) {
+      const dst = this.bloom[i - 1];
+      dst.g.globalCompositeOperation = 'lighter';
+      dst.g.globalAlpha = 0.72;
+      dst.g.drawImage(this.bloom[i].c, 0, 0, dst.c.width, dst.c.height);
+      dst.g.globalAlpha = 1;
+      dst.g.globalCompositeOperation = 'source-over';
     }
   }
 
   /**
-   * Isolate one channel by multiplying the scene with a pure primary, then add
-   * it back offset. Two of those in opposite directions is a convincing lens
-   * fringe, and it only runs when there is speed to justify it.
+   * Isolate one channel by multiplying the scene with a pure primary. Both
+   * ghosts are accumulated in a half-size buffer and composited together, so
+   * the fringe costs one pass rather than two — and it runs at exactly the
+   * moment the screen is busiest, which is the moment that matters.
    */
-  private ghost(ctx: CanvasRenderingContext2D, mult: string, dx: number, a: number) {
-    const t = this.tintCtx;
-    const tw = this.tint.width;
-    const th = this.tint.height;
+  private buildGhosts(ab: number) {
+    const t = this.tint.g;
+    const tw = this.tint.c.width;
+    const th = this.tint.c.height;
+    const acc = this.ghostAcc.g;
 
-    t.setTransform(1, 0, 0, 1, 0, 0);
-    t.globalCompositeOperation = 'source-over';
-    t.globalAlpha = 1;
-    t.clearRect(0, 0, tw, th);
-    t.drawImage(this.scene, 0, 0, tw, th);
-    t.globalCompositeOperation = 'multiply';
-    t.fillStyle = mult;
-    t.fillRect(0, 0, tw, th);
-    t.globalCompositeOperation = 'source-over';
+    acc.setTransform(1, 0, 0, 1, 0, 0);
+    acc.globalCompositeOperation = 'source-over';
+    acc.globalAlpha = 1;
+    acc.clearRect(0, 0, tw, th);
 
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = a;
-    ctx.drawImage(this.tint, dx, 0, view.w, view.h);
+    // Half-buffer offset: the shift is authored in CSS pixels.
+    const k = (ab * this.q) / TINT_DIV;
+    for (const [mult, dx] of [['#ff0044', -k], ['#00ffee', k]] as const) {
+      t.setTransform(1, 0, 0, 1, 0, 0);
+      t.globalCompositeOperation = 'source-over';
+      t.globalAlpha = 1;
+      t.clearRect(0, 0, tw, th);
+      t.drawImage(this.scene, dx, 0, tw, th);
+      t.globalCompositeOperation = 'multiply';
+      t.fillStyle = mult;
+      t.fillRect(0, 0, tw, th);
+      t.globalCompositeOperation = 'source-over';
+
+      acc.globalCompositeOperation = 'lighter';
+      acc.drawImage(this.tint.c, 0, 0);
+    }
+    acc.globalCompositeOperation = 'source-over';
   }
 
-  /** Blit the finished world into `ctx` with post applied. */
-  composite(ctx: CanvasRenderingContext2D, game: Game) {
+  /**
+   * Every full-frame effect, applied inside the scene buffer.
+   *
+   * Called after the world is drawn and before the single blit out. Ordering is
+   * the same as it always was — fringe, bloom, vignette, danger, flash — it
+   * simply happens somewhere cheaper.
+   */
+  post(game: Game) {
     const Q = quality.current;
+    const c = this.sceneCtx;
+    const w = this.scene.width;
+    const h = this.scene.height;
     const speed = game.player.speedNorm;
     const j = game.juice;
+
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalCompositeOperation = 'source-over';
+    c.globalAlpha = 1;
+
     const ab = Q.chroma ? speed * 5.2 + j.fringe * 4.4 : 0;
-
-    // NB: the caller's transform (device-pixel-ratio scaling) is left alone —
-    // everything from here down is authored in CSS pixels.
-    ctx.save();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(this.scene, 0, 0, view.w, view.h);
-
     if (ab > 0.4) {
-      const a = clamp(0.1 + ab * 0.03, 0, 0.42);
-      this.ghost(ctx, '#ff0044', -ab, a);
-      this.ghost(ctx, '#00ffee', ab, a);
+      this.buildGhosts(ab);
+      c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = clamp(0.1 + ab * 0.03, 0, 0.42);
+      c.drawImage(this.ghostAcc.c, 0, 0, w, h);
+      c.globalAlpha = 1;
+      c.globalCompositeOperation = 'source-over';
     }
 
     if (Q.bloom > 0) {
-      this.buildBloom(speed * 0.6 + j.flash);
-      ctx.globalCompositeOperation = 'lighter';
-      // Two draws — a wide soft halo, then a tighter brighter core — read as a
-      // real bloom curve. Kept low: additive bloom compounds, and the enemy
-      // silhouettes have to stay legible at the exact moment the screen is
-      // brightest, which is the moment the player is deciding where to go next.
-      ctx.globalAlpha = clamp(0.25 + speed * 0.08, 0, 1);
-      ctx.drawImage(this.bloom, -7, -7, view.w + 14, view.h + 14);
-      if (Q.bloom > 1) {
-        ctx.globalAlpha = clamp(0.12 + speed * 0.05, 0, 1);
-        ctx.drawImage(this.bloom, 0, 0, view.w, view.h);
-      }
+      this.buildBloom(Q.bloom > 1 ? 3 : 2);
+      // Kept low: additive bloom compounds, and the enemy silhouettes have to
+      // stay legible at the exact moment the screen is brightest — which is the
+      // moment the player is deciding where to go next.
+      c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = clamp(0.3 + speed * 0.12 + j.flash * 0.3, 0, 1);
+      const b = this.bloom[0].c;
+      c.drawImage(b, -6, -6, w + 12, h + 12);
+      c.globalAlpha = 1;
+      c.globalCompositeOperation = 'source-over';
     }
-    ctx.restore();
 
-    // Vignette. Drawn after bloom so the corners actually stay dark.
-    //
-    // Built once per window size and modulated with `globalAlpha` rather than
-    // rebuilt whenever the aim depth changes: scaling every stop by a constant
-    // is exactly what globalAlpha does, so this is the same image without a new
-    // gradient object and a fresh ramp evaluation every frame.
-    const key = `${view.w}x${view.h}`;
+    // Vignette. After bloom, so the corners actually stay dark. Built once per
+    // buffer size and dimmed with globalAlpha — scaling every stop by a
+    // constant is exactly what globalAlpha does.
+    const key = `${w}x${h}`;
     if (this.vignetteKey !== key || !this.vignette) {
-      const g = ctx.createRadialGradient(
-        view.w * 0.5, view.h * 0.5, Math.min(view.w, view.h) * 0.26,
-        view.w * 0.5, view.h * 0.5, Math.max(view.w, view.h) * 0.78,
+      const g = c.createRadialGradient(
+        w * 0.5, h * 0.5, Math.min(w, h) * 0.26,
+        w * 0.5, h * 0.5, Math.max(w, h) * 0.78,
       );
       g.addColorStop(0, 'rgba(0,0,0,0)');
       g.addColorStop(1, 'rgba(0,0,0,1)');
       this.vignette = g;
       this.vignetteKey = key;
     }
-    ctx.save();
-    ctx.globalAlpha = 0.5 + game.aimBlend * 0.22;
-    ctx.fillStyle = this.vignette;
-    ctx.fillRect(0, 0, view.w, view.h);
-    ctx.restore();
+    c.globalAlpha = 0.5 + game.aimBlend * 0.22;
+    c.fillStyle = this.vignette;
+    c.fillRect(0, 0, w, h);
+    c.globalAlpha = 1;
+
+    // Danger bleed at the top and bottom edges while the hull is critical.
+    if (game.inDanger) {
+      if (this.edgeKey !== key || !this.edge) {
+        const g = c.createLinearGradient(0, 0, 0, h);
+        g.addColorStop(0, rgba(COL.danger, 1));
+        g.addColorStop(0.25, rgba(COL.danger, 0));
+        g.addColorStop(0.75, rgba(COL.danger, 0));
+        g.addColorStop(1, rgba(COL.danger, 1));
+        this.edge = g;
+        this.edgeKey = key;
+      }
+      c.globalAlpha = 0.12 + 0.12 * Math.sin(game.clock * 7);
+      c.fillStyle = this.edge;
+      c.fillRect(0, 0, w, h);
+      c.globalAlpha = 1;
+    }
 
     if (j.flash > 0.002) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = rgba(j.flashCol, Math.min(0.85, j.flash));
-      ctx.fillRect(0, 0, view.w, view.h);
-      ctx.restore();
+      c.globalCompositeOperation = 'lighter';
+      c.fillStyle = rgba(j.flashCol, Math.min(0.85, j.flash));
+      c.fillRect(0, 0, w, h);
+      c.globalCompositeOperation = 'source-over';
     }
+
+    // Grain lives here rather than over the finished frame: half the pixels,
+    // and it stops the one blend mode that reads the destination back from
+    // touching the HUD, which was never meant to be post-processed anyway.
+    if (Q.grain) {
+      this.grainPhase = (this.grainPhase + 11) % 160;
+      if (!this.grainPattern) this.grainPattern = c.createPattern(this.grain, 'repeat');
+      if (this.grainPattern) {
+        c.save();
+        c.globalCompositeOperation = 'overlay';
+        c.globalAlpha = 0.05 + speed * 0.03;
+        c.fillStyle = this.grainPattern;
+        c.translate(-this.grainPhase, (this.grainPhase * 1.7) % 160);
+        c.fillRect(0, 0, w + 160, h + 160);
+        c.restore();
+      }
+    }
+  }
+
+  /**
+   * The finished world, blitted out in one pass.
+   *
+   * NB: the caller's transform (device-pixel-ratio scaling) is left alone —
+   * everything from here down is authored in CSS pixels.
+   */
+  composite(ctx: CanvasRenderingContext2D) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.scene, 0, 0, view.w, view.h);
+    ctx.restore();
   }
 
   /**
@@ -272,44 +373,25 @@ export class PostFX {
     return this.scanPattern;
   }
 
-  /** Grain + scanlines over everything, last. */
-  finish(ctx: CanvasRenderingContext2D, game: Game) {
-    // Two fullscreen passes, one of them a blend mode that has to read the
-    // frame back. It is the first thing worth losing on a machine that is
-    // struggling, and the last thing anyone would notice missing.
+  /**
+   * Scanlines over everything, last — the one effect that deliberately crosses
+   * the HUD, because a scanline that stops at the readouts stops reading as a
+   * screen. 3px pitch, very low contrast.
+   *
+   * `source-over`, not `multiply`: the source here is pure black, and
+   * `black * dst` composited at alpha a is `(1-a)*dst` — the exact result of
+   * painting black over it at the same alpha. Identical image, no readback.
+   */
+  finish(ctx: CanvasRenderingContext2D) {
     if (!quality.current.grain) return;
-    this.grainPhase = (this.grainPhase + 11) % 160;
-
-    ctx.save();
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.globalAlpha = 0.042 + game.player.speedNorm * 0.03;
-    if (!this.grainPattern) this.grainPattern = ctx.createPattern(this.grain, 'repeat');
-    if (this.grainPattern) {
-      ctx.fillStyle = this.grainPattern;
-      ctx.translate(-this.grainPhase, (this.grainPhase * 1.7) % 160);
-      ctx.fillRect(0, 0, view.w + 160, view.h + 160);
-    }
-    ctx.restore();
-
-    // 3px pitch, very low contrast: enough to read as a screen, not enough to
-    // fight the art or moire at odd device ratios.
-    //
-    // A tiled pattern rather than a loop of hairlines. Three hundred separate
-    // rects is three hundred draw calls a mobile GPU does not need to make, and
-    // it buys nothing a four-pixel tile does not.
-    //
-    // `source-over`, not `multiply`: the source here is pure black, and
-    // `black * dst` composited at alpha a is `(1-a)*dst` — the exact result of
-    // painting black over it at the same alpha. Identical image, no readback.
     const scan = this.ensureScanline(ctx);
-    if (scan) {
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 0.1;
-      ctx.fillStyle = scan;
-      ctx.fillRect(0, 0, view.w * view.dpr, view.h * view.dpr);
-      ctx.restore();
-    }
+    if (!scan) return;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = scan;
+    ctx.fillRect(0, 0, view.w * view.dpr, view.h * view.dpr);
+    ctx.restore();
   }
 }

@@ -70,32 +70,56 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
 /**
  * The body outline of each species, unrotated, in its own local space.
  *
- * One source of truth shared by the renderer (which strokes it) and the death
- * effect (which breaks it apart edge by edge). If these ever diverged, an enemy
- * would visibly shatter into pieces of a shape it never was.
+ * One source of truth shared by the renderer (which strokes and lights it) and
+ * the death effect (which breaks it apart edge by edge). If these diverged, an
+ * enemy would visibly shatter into pieces of a shape it never was.
+ *
+ * None of these are regular polygons, and that is the point. A perfect diamond,
+ * a perfect square and a perfect twelve-point star are what a shape generator
+ * reaches for; they read as placeholder because every vertex is where the
+ * formula put it rather than where a designer did. Each outline below is
+ * asymmetric or chamfered in a way that states what the thing is — a chipped
+ * ember, a sealed pod, an armoured prow, a swept interceptor, a bolted gun
+ * housing — and the shatter inherits all of it for free.
  */
 export function silhouette(kind: EnemyKind, r: number): [number, number][] {
   switch (kind) {
+    // A chipped shard of something still burning: no two flanks alike.
     case 'mote':
-      return [[0, -r], [r * 0.62, 0], [0, r], [-r * 0.62, 0]];
-    case 'seeder':
-      return [[-r, -r], [r, -r], [r, r], [-r, r]];
+      return [
+        [0, -r], [r * 0.5, -r * 0.28], [r * 0.42, r * 0.36],
+        [0, r], [-r * 0.46, r * 0.3], [-r * 0.52, -r * 0.34],
+      ];
+    // A sealed pod. The chamfered corners are the whole tell: something was
+    // manufactured here, with a bevel, by someone.
+    case 'seeder': {
+      const c = r * 0.36;
+      return [
+        [-r + c, -r], [r - c, -r], [r, -r + c], [r, r - c],
+        [r - c, r], [-r + c, r], [-r, r - c], [-r, -r + c],
+      ];
+    }
+    // An armoured shell, stretched along its prow rather than a perfect hex.
     case 'ward': {
       const pts: [number, number][] = [];
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * TAU;
-        pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+        pts.push([Math.cos(a) * r * 1.06, Math.sin(a) * r * 0.9]);
       }
       return pts;
     }
+    // A swept interceptor: lance nose, raked wings, a notch cut in the tail.
     case 'lancer':
-      return [[r * 1.4, 0], [-r * 0.8, -r * 0.95], [-r * 0.4, 0], [-r * 0.8, r * 0.95]];
+      return [
+        [r * 1.5, 0], [r * 0.15, -r * 0.45], [-r * 0.62, -r], [-r * 0.3, -r * 0.3],
+        [-r * 0.9, 0], [-r * 0.3, r * 0.3], [-r * 0.62, r], [r * 0.15, r * 0.45],
+      ];
+    // A gun housing bolted to the floor — heavy lugs, not decorative spikes.
     case 'spine': {
       const pts: [number, number][] = [];
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * TAU;
-        const rr = i % 2 === 0 ? r : r * 0.56;
-        pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * TAU;
+        pts.push([Math.cos(a) * (i % 2 === 0 ? r : r * 0.62), Math.sin(a) * (i % 2 === 0 ? r : r * 0.62)]);
       }
       return pts;
     }

@@ -76,10 +76,24 @@ const LADDER: QualityLevel[] = [
 const SLOW_MS = 20;
 const FAST_MS = 18;
 
-/** Frames per decision. Long enough to be a trend, short enough to react. */
+/**
+ * Frames per decision.
+ *
+ * The first window is short on purpose. A machine that cannot run this needs to
+ * find that out in the first second, not the first minute — with a long window
+ * and a settling delay after each step, falling five tiers took over half a
+ * minute, which is thirty seconds of a first-time player deciding the game is
+ * broken. Once a tier holds, the window lengthens and decisions get calmer.
+ */
+const WINDOW_FAST = 12;
 const WINDOW = 45;
 /** Consecutive comfortable windows before climbing back a tier. */
 const RECOVER_WINDOWS = 6;
+/**
+ * Frame time past which one step down is obviously not enough. Below 20fps,
+ * stepping a tier at a time just draws out the stutter; take two.
+ */
+const DIRE_MS = 50;
 
 /**
  * A hard ceiling on the visible canvas, independent of how fast the machine is.
@@ -96,6 +110,8 @@ class Quality {
   /** Set true by the loop once a real frame has been measured. */
   private samples: number[] = [];
   private goodWindows = 0;
+  /** False until a tier has held the budget once; keeps early windows short. */
+  private settled = false;
   /** Frames to ignore — start-up, and the frame after any long stall. */
   private settle = 30;
   /** Pinned by the debug overlay so a tier can be inspected on purpose. */
@@ -146,7 +162,9 @@ class Quality {
     }
 
     this.samples.push(ms);
-    if (this.samples.length < WINDOW) return;
+    // Short windows until a tier has proved itself, long ones after.
+    const need = this.settled ? WINDOW : WINDOW_FAST;
+    if (this.samples.length < need) return;
 
     const sorted = this.samples.slice().sort((a, b) => a - b);
     this.medianMs = sorted[sorted.length >> 1];
@@ -154,17 +172,22 @@ class Quality {
     if (this.locked) return;
 
     if (this.medianMs > SLOW_MS && this.level < LADDER.length - 1) {
-      this.level++;
+      // Two steps when the frame is nowhere near the budget; one when it is close.
+      this.level = Math.min(LADDER.length - 1, this.level + (this.medianMs > DIRE_MS ? 2 : 1));
       this.goodWindows = 0;
+      this.settled = false;
       // Give the new tier a moment before judging it.
-      this.settle = 20;
+      this.settle = 8;
     } else if (this.medianMs < FAST_MS && this.level > 0) {
+      this.settled = true;
       if (++this.goodWindows >= RECOVER_WINDOWS) {
         this.level--;
         this.goodWindows = 0;
         this.settle = 20;
       }
     } else {
+      // Holding the budget at this tier: stop reacting on a hair trigger.
+      this.settled = true;
       this.goodWindows = 0;
     }
   }

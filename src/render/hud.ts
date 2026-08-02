@@ -7,10 +7,10 @@ import {
   type RGB,
 } from '../config';
 import { TAU, clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine/math';
-import { SPECS } from '../game/enemies';
+import { SPECS, silhouette, type EnemyKind } from '../game/enemies';
 import { ENEMY_COL, pad, type Game } from '../game/game';
 import { view } from '../viewport';
-import { glowLayer } from './glow';
+import { active } from './glow';
 import { IS_TOUCH, drawUI, drawVec, uiWidth, vecWidth } from './text';
 
 /**
@@ -67,13 +67,16 @@ export function drawHud(ctx: CanvasRenderingContext2D, game: Game) {
   drawFocus(ctx, game, L, B, (R - L) * 0.34, S);
   drawCombo(ctx, game, R, B, S);
 
-  drawTutorial(ctx, game, S);
-  drawHints(ctx, game, cx, B, S);
-  // Upper third, not dead centre: on wave one the player is standing in the
-  // middle of the arena, and a card printed over the ship hides the one thing
-  // the tutorial is pointing at.
-  drawWaveCard(ctx, game, cx, T + (B - T) * 0.3, S);
-  drawDangerEdge(ctx, game);
+  // Announcements are for the run, not for the pause menu — a wave card or a
+  // contact card left up behind PAUSED collides with it and reads as a bug.
+  if (game.state !== 'paused') {
+    drawTutorial(ctx, game, S);
+    drawHints(ctx, game, cx, B, S);
+    // Upper third, not dead centre: on wave one the player is standing in the
+    // middle of the arena, and a card printed over the ship hides the one thing
+    // the tutorial is pointing at.
+    drawWaveCard(ctx, game, cx, T + (B - T) * 0.3, S);
+  }
 }
 
 // ---------------------------------------------------------------------- hull
@@ -122,11 +125,10 @@ function drawHull(
       const col = danger ? COL.danger : COL.hull;
       ctx.fillStyle = rgba(col, a);
       ctx.fill();
-      // The bloom around a lit pip, blurred in a buffer the size of the pip
-      // rather than the size of the screen.
-      const r = 4;
-      glowLayer(ctx, -w, -h, w * 2, h * 2, r * 3, 0.28 * a, (g, k) => {
-        g.filter = `blur(${Math.max(0.4, r * k).toFixed(2)}px)`;
+      // A lit pip bleeds light like everything else that is lit; it goes into
+      // the same accumulator the type does and is blurred with it, once.
+      active.emit(ctx, (g) => {
+        g.globalAlpha = 0.34 * a;
         g.fillStyle = rgba(col, 1);
         path(g);
         g.fill();
@@ -442,79 +444,61 @@ function drawHints(ctx: CanvasRenderingContext2D, game: Game, cx: number, bottom
 }
 
 /**
- * Simplified enemy silhouettes for cards and the legend, matching the in-game
- * body language: a solid dark hull, a lit rim, and the white glint of the
- * player's light. The card and the thing on the field must be the same animal.
+ * Enemy portraits for the rule cards and the pause codex.
+ *
+ * Drawn from the same `silhouette` data the field bodies and the shatter use,
+ * with the same dark hull, lit rim and white glint. A codex that showed a
+ * tidied-up version of each enemy would be worse than no codex: the player is
+ * consulting it precisely to match a picture against something that just killed
+ * them, and it has to be the same animal.
  */
 export function drawEnemyIcon(ctx: CanvasRenderingContext2D, kind: string, clock: number) {
   const col = ENEMY_COL[kind as keyof typeof ENEMY_COL] ?? COL.ink;
-  const r = 15;
-  ctx.strokeStyle = rgba(col, 1);
-  ctx.fillStyle = `rgba(${(col[0] * 0.14 + 11) | 0},${(col[1] * 0.14 + 11) | 0},${(col[2] * 0.14 + 14) | 0},1)`;
-  ctx.lineWidth = 2.2;
-  ctx.save();
+  const r = 14;
+  const pts = silhouette(kind as EnemyKind, r);
+  // The card's light comes from the right, so the rim sits where the reader's
+  // eye already is — and matches the glint below it.
+  const spin =
+    kind === 'mote' ? clock * 1.2
+    : kind === 'seeder' ? clock * 0.5
+    : kind === 'lancer' ? Math.sin(clock * 0.8) * 0.5
+    : kind === 'spine' ? clock * 0.4
+    : clock * 0.25;
 
-  switch (kind) {
-    case 'mote':
-      ctx.rotate(clock * 1.2);
-      shape(ctx, [[0, -r], [r * 0.62, 0], [0, r], [-r * 0.62, 0]]);
-      break;
-    case 'seeder':
-      ctx.rotate(clock * 0.5);
-      shape(ctx, [[-r, -r], [r, -r], [r, r], [-r, r]]);
-      break;
-    case 'ward': {
-      const pts: [number, number][] = [];
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * TAU;
-        pts.push([Math.cos(a) * r * 0.8, Math.sin(a) * r * 0.8]);
-      }
-      shape(ctx, pts);
-      ctx.strokeStyle = rgba(col, 1);
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(0, 0, r * 1.25, -0.95 + Math.sin(clock) * 0.6, 0.95 + Math.sin(clock) * 0.6);
-      ctx.stroke();
-      break;
-    }
-    case 'lancer':
-      ctx.rotate(Math.sin(clock * 0.8) * 0.5);
-      shape(ctx, [[r * 1.3, 0], [-r * 0.75, -r * 0.9], [-r * 0.35, 0], [-r * 0.75, r * 0.9]]);
-      break;
-    case 'spine': {
-      ctx.save();
-      ctx.rotate(clock * 0.4);
-      const pts: [number, number][] = [];
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * TAU;
-        const rr = i % 2 === 0 ? r : r * 0.55;
-        pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
-      }
-      shape(ctx, pts);
-      ctx.restore();
-      ctx.lineWidth = 2.6;
-      ctx.beginPath();
-      ctx.moveTo(r * 0.3, 0);
-      ctx.lineTo(r * 1.2, 0);
-      ctx.stroke();
-      break;
-    }
-  }
+  ctx.save();
+  ctx.rotate(spin);
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = `rgba(${(col[0] * 0.14 + 11) | 0},${(col[1] * 0.14 + 11) | 0},${(col[2] * 0.14 + 14) | 0},1)`;
+  ctx.fill();
+  ctx.strokeStyle = rgba(col, 0.95);
+  ctx.lineWidth = 2;
+  ctx.stroke();
   ctx.restore();
+
+  if (kind === 'ward') {
+    ctx.strokeStyle = rgba(col, 1);
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.35, -0.95 + Math.sin(clock) * 0.6, 0.95 + Math.sin(clock) * 0.6);
+    ctx.stroke();
+  }
+  if (kind === 'spine') {
+    ctx.strokeStyle = rgba(col, 0.9);
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.moveTo(r * 0.3, 0);
+    ctx.lineTo(r * 1.25, 0);
+    ctx.stroke();
+  }
+
   // The glint: even in a card, it is watching.
   ctx.fillStyle = rgba(COL.playerCore, 0.9);
   ctx.beginPath();
   ctx.arc(r * 0.34, 0, 2.2, 0, TAU);
   ctx.fill();
-}
-
-function shape(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
-  ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
 }
 
 // ----------------------------------------------------------------- wave card
@@ -564,28 +548,11 @@ function drawWaveCard(ctx: CanvasRenderingContext2D, game: Game, cx: number, cy:
 }
 
 // -------------------------------------------------------------------- danger
-let edge: CanvasGradient | null = null;
-let edgeH = 0;
-
-function drawDangerEdge(ctx: CanvasRenderingContext2D, game: Game) {
-  if (!game.inDanger) return;
-  // Built at full strength once per window height and dimmed with globalAlpha;
-  // the pulse is a constant scale on every stop, which is what globalAlpha is.
-  if (!edge || edgeH !== view.h) {
-    const g = ctx.createLinearGradient(0, 0, 0, view.h);
-    g.addColorStop(0, rgba(COL.danger, 1));
-    g.addColorStop(0.25, rgba(COL.danger, 0));
-    g.addColorStop(0.75, rgba(COL.danger, 0));
-    g.addColorStop(1, rgba(COL.danger, 1));
-    edge = g;
-    edgeH = view.h;
-  }
-  ctx.save();
-  ctx.globalAlpha = 0.1 + 0.1 * Math.sin(game.clock * 7);
-  ctx.fillStyle = edge;
-  ctx.fillRect(0, 0, view.w, view.h);
-  ctx.restore();
-}
+// The danger bleed used to live here as its own full-screen gradient over the
+// finished frame. It is now applied inside the scene buffer (see `postfx.post`)
+// where it costs half as much — and it was on screen at exactly the moments the
+// frame budget was tightest, which made it the worst possible place to spend a
+// full-resolution pass.
 
 // ------------------------------------------------------------------ utilities
 /** 1234567 -> "1,234,567". Grouping makes a big number read as an achievement. */

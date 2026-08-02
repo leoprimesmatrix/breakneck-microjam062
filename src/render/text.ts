@@ -1,4 +1,4 @@
-import { CAN_BLUR, glowLayer } from './glow';
+import { active } from './glow';
 import { glyphFor } from './glyphs';
 import { quality } from './quality';
 
@@ -42,14 +42,11 @@ export interface VecStyle {
 const DEFAULT_TRACK = 0.09;
 const DEFAULT_WEIGHT = 0.115;
 
-/**
- * How far glyph ink can stray outside the box implied by the cap height and the
- * advance width, in em. `Q` and `,` hang below the baseline, and several glyphs
- * are drawn wider than they advance so that tracked text sets tightly. The halo
- * buffer is sized from these: get them wrong and a comma's tail loses its glow.
- */
-const INK_DESCENT = 0.12;
-const INK_OVERHANG = 0.13;
+// NB: glyph ink strays outside the box implied by cap height and advance width
+// — `Q` and `,` hang to 1.12em, and several glyphs draw wider than they advance
+// so tracked text sets tightly. That used to matter, because each halo was
+// blurred inside a bounding box and a comma's tail could fall outside it. The
+// shared accumulator covers the whole target, so there is no box to get wrong.
 
 /**
  * Whether the primary input is a finger. Used only to choose wording — "TAP"
@@ -133,43 +130,16 @@ export function drawVec(
    */
   if (glow > 0 && quality.current.textGlow) {
     const gc = style.glowColor ?? style.color ?? '#fff';
-    // Radius in *user* units. Canvas filters count device pixels, so leaving it
-    // in those would make the halo tighten as the display gets sharper.
-    const rad = size * 0.11 * glow;
-    const left = px - weight;
-    const top = py - size - weight;
-    const w = width + (Math.max(0, slant) + INK_OVERHANG) * size + weight * 2;
-    const h = size * (1 + INK_DESCENT) + weight * 2;
-
-    const drawn =
-      CAN_BLUR &&
-      glowLayer(ctx, left, top, w, h, rad * 3.2 + 2, baseA, (g, k) => {
-        g.lineCap = 'butt';
-        g.lineJoin = 'miter';
-        g.miterLimit = 3;
-        g.globalCompositeOperation = 'lighter';
-        g.strokeStyle = gc;
-        // A wide soft bed and a tight bright core: two radii read as a real
-        // falloff where one reads as a smudge.
-        for (const [wm, a, rm] of [[1.1, 0.4, 1], [1.05, 0.34, 0.32]] as const) {
-          g.filter = `blur(${Math.max(0.4, rad * rm * k).toFixed(2)}px)`;
-          g.globalAlpha = a * Math.min(1, glow);
-          g.lineWidth = weight * wm;
-          strokeRun(g, text, px, py, size, track, slant, budget);
-        }
-      });
-
-    if (!drawn) {
-      // No canvas filter, or a transform the buffer cannot represent. Fatter
-      // strokes at low alpha are not as good, but they are still a glow.
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.strokeStyle = gc;
-      for (const [wm, a] of [[1 + 1.3 * glow, 0.07], [1 + 0.5 * glow, 0.1]] as const) {
-        ctx.globalAlpha = baseA * a * glow;
-        ctx.lineWidth = weight * wm;
-        strokeRun(ctx, text, px, py, size, track, slant, budget);
-      }
-    }
+    // Stamped into the shared accumulator rather than blurred here. The halo's
+    // *width* comes from how fat a stroke this leaves behind — bolder, larger
+    // type glows wider on its own, which is what bloom does anyway — and the
+    // single blur that reaches all of them happens once, at the end of the pass.
+    active.emit(ctx, (g) => {
+      g.strokeStyle = gc;
+      g.globalAlpha = baseA * Math.min(0.5, 0.13 + glow * 0.14);
+      g.lineWidth = weight * (1 + glow * 0.5);
+      strokeRun(g, text, px, py, size, track, slant, budget);
+    });
   }
 
   ctx.globalCompositeOperation = 'source-over';

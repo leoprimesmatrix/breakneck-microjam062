@@ -2,6 +2,7 @@ import { COL, rgba } from '../config';
 import { TAU, clamp } from '../engine/math';
 import type { Game } from '../game/game';
 import { view } from '../viewport';
+import { sceneGlow, setGlowTarget, uiGlow } from './glow';
 import { drawHud } from './hud';
 import { PostFX } from './postfx';
 import { quality } from './quality';
@@ -33,14 +34,30 @@ const off = (s: string) => import.meta.env.DEV && skip.has(s);
 
 export function render(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  const lit = quality.current.textGlow;
+  const dw = view.w * view.dpr;
+  const dh = view.h * view.dpr;
 
+  // World. Its halos land in the scene accumulator and are flushed before post,
+  // so the bloom downstream picks them up like any other light in the room.
   const scene = fx.begin(game);
+  sceneGlow.begin(fx.scene.width, fx.scene.height, lit);
+  setGlowTarget(sceneGlow);
   if (!off('scene')) drawScene(scene, game);
+  sceneGlow.flush(scene, fx.scene.width, fx.scene.height, 0.95);
+  if (!off('post')) fx.post(game);
 
-  if (!off('composite')) fx.composite(ctx, game);
+  if (!off('composite')) fx.composite(ctx);
+
+  // Interface. Everything lit on the visible canvas — type, hull pips — shares
+  // one accumulator and one blur, added over the top at the end of the pass.
+  uiGlow.begin(dw, dh, lit);
+  setGlowTarget(uiGlow);
   if (!off('hud') && (game.state === 'play' || game.state === 'paused')) drawHud(ctx, game);
   if (!off('screens')) drawScreens(ctx, game);
-  if (!off('finish')) fx.finish(ctx, game);
+  uiGlow.flush(ctx, dw, dh, 0.78);
+
+  if (!off('finish')) fx.finish(ctx);
   if (!off('cursor')) drawCursor(ctx, game);
   if (showStats) drawStats(ctx);
 }
@@ -86,10 +103,11 @@ function drawStats(ctx: CanvasRenderingContext2D) {
 export const stages = import.meta.env.DEV
   ? {
       scene: (_ctx: CanvasRenderingContext2D, game: Game) => drawScene(fx.begin(game), game),
-      composite: (ctx: CanvasRenderingContext2D, game: Game) => fx.composite(ctx, game),
+      post: (_ctx: CanvasRenderingContext2D, game: Game) => fx.post(game),
+      composite: (ctx: CanvasRenderingContext2D) => fx.composite(ctx),
       hud: (ctx: CanvasRenderingContext2D, game: Game) => drawHud(ctx, game),
       screens: (ctx: CanvasRenderingContext2D, game: Game) => drawScreens(ctx, game),
-      finish: (ctx: CanvasRenderingContext2D, game: Game) => fx.finish(ctx, game),
+      finish: (ctx: CanvasRenderingContext2D) => fx.finish(ctx),
       cursor: drawCursor,
     }
   : undefined;
