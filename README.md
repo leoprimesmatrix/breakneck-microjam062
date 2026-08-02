@@ -59,7 +59,7 @@ npm run build
 | Mouse | aim at the cursor · **hold left button** to charge · release to strike |
 | Keyboard | **WASD** / arrows steer the reticle · **hold Space** or **Shift** · release |
 | Touch | touch anywhere to aim through that point · release to strike |
-| | `P` / `Esc` pause · `M` mute |
+| | `P` / `Esc` pause · `M` mute · `F` frame stats |
 
 ## How the theme is used
 
@@ -90,6 +90,8 @@ src/
   render/
     glyphs.ts      bespoke vector display typeface
     text.ts        vector + system type setting
+    glow.ts        halos, blurred in a buffer that fits them
+    quality.ts     measures frame time, decides what the machine can afford
     scene.ts       arena, entities, aim preview
     hud.ts         crisp screen-space HUD
     screens.ts     title, pause, results
@@ -97,7 +99,7 @@ src/
     renderer.ts    frame assembly
 ```
 
-Two details worth knowing:
+Three details worth knowing:
 
 - **`strike.ts` is run twice per frame's worth of intent** — once to draw the
   preview and once to execute. It is deliberately one function, because two
@@ -107,6 +109,13 @@ Two details worth knowing:
 - **The display face is vector data, not a webfont.** It ships inside the bundle,
   renders identically everywhere, and can be drawn on progressively — which is
   where the title sequence comes from.
+- **No glow is ever blurred at screen size.** `ctx.filter = 'blur()'` allocates
+  and blurs a layer the size of the clip — the whole canvas — for every draw it
+  touches, so eight glowing things cost eight full-screen Gaussians a frame. A
+  blur is low-frequency by definition, so `glow.ts` renders each halo into a
+  small buffer, blurs it there, and scales it back up. Same image; a few thousand
+  pixels instead of five million. If the frame budget still slips, `quality.ts`
+  sheds effects in order of what is least missed — press `F` to watch it.
 
 ## Credits
 

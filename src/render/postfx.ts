@@ -2,6 +2,8 @@ import { COL, rgba } from '../config';
 import { clamp } from '../engine/math';
 import type { Game } from '../game/game';
 import { view } from '../viewport';
+import { CAN_BLUR } from './glow';
+import { quality } from './quality';
 
 /**
  * Screen-space post: bloom, chromatic aberration, vignette, flash, grain.
@@ -16,7 +18,6 @@ import { view } from '../viewport';
  * leave a judge looking at a black rectangle.
  */
 
-const BLOOM_DIV = 3;
 const TINT_DIV = 2;
 /** Cap on scene-buffer pixels; a 4K window must not allocate a 33MP blur. */
 const MAX_PIXELS = 2_600_000;
@@ -28,17 +29,6 @@ function makeCanvas(w: number, h: number) {
   return c;
 }
 
-function detectFilterSupport(): boolean {
-  try {
-    const c = makeCanvas(2, 2).getContext('2d');
-    if (!c) return false;
-    c.filter = 'blur(1px)';
-    return c.filter !== 'none' && c.filter !== '';
-  } catch {
-    return false;
-  }
-}
-
 export class PostFX {
   readonly scene: HTMLCanvasElement;
   readonly sceneCtx: CanvasRenderingContext2D;
@@ -48,11 +38,17 @@ export class PostFX {
   private tint: HTMLCanvasElement;
   private tintCtx: CanvasRenderingContext2D;
   private grain: HTMLCanvasElement;
+  private grainPattern: CanvasPattern | null = null;
+  private scanTile: HTMLCanvasElement | null = null;
+  private scanPattern: CanvasPattern | null = null;
+  private vignette: CanvasGradient | null = null;
+  private vignetteKey = '';
 
-  private readonly canFilter = detectFilterSupport();
+  private readonly canFilter = CAN_BLUR;
   private q = 1;
   private lastW = 0;
   private lastH = 0;
+  private lastDiv = 0;
   private grainPhase = 0;
 
   constructor() {
@@ -81,18 +77,21 @@ export class PostFX {
   }
 
   private ensureSize() {
-    let q = clamp(view.dpr, 1, 2);
-    while (view.w * q * view.h * q > MAX_PIXELS && q > 0.55) q -= 0.1;
+    const Q = quality.current;
+    let q = clamp(view.dpr, 1, 2) * Q.sceneScale;
+    while (view.w * q * view.h * q > MAX_PIXELS && q > 0.4) q -= 0.1;
     const w = Math.round(view.w * q);
     const h = Math.round(view.h * q);
-    if (w === this.lastW && h === this.lastH) return;
+    const div = Q.bloomDiv;
+    if (w === this.lastW && h === this.lastH && div === this.lastDiv) return;
     this.q = q;
     this.lastW = w;
     this.lastH = h;
+    this.lastDiv = div;
     this.scene.width = w;
     this.scene.height = h;
-    this.bloom.width = Math.max(1, Math.round(w / BLOOM_DIV));
-    this.bloom.height = Math.max(1, Math.round(h / BLOOM_DIV));
+    this.bloom.width = Math.max(1, Math.round(w / div));
+    this.bloom.height = Math.max(1, Math.round(h / div));
     this.tint.width = Math.max(1, Math.round(w / TINT_DIV));
     this.tint.height = Math.max(1, Math.round(h / TINT_DIV));
   }
@@ -187,9 +186,10 @@ export class PostFX {
 
   /** Blit the finished world into `ctx` with post applied. */
   composite(ctx: CanvasRenderingContext2D, game: Game) {
+    const Q = quality.current;
     const speed = game.player.speedNorm;
     const j = game.juice;
-    const ab = speed * 5.2 + j.fringe * 4.4;
+    const ab = Q.chroma ? speed * 5.2 + j.fringe * 4.4 : 0;
 
     // NB: the caller's transform (device-pixel-ratio scaling) is left alone —
     // everything from here down is authored in CSS pixels.
@@ -205,27 +205,44 @@ export class PostFX {
       this.ghost(ctx, '#00ffee', ab, a);
     }
 
-    this.buildBloom(speed * 0.6 + j.flash);
-    ctx.globalCompositeOperation = 'lighter';
-    // Two draws — a wide soft halo, then a tighter brighter core — read as a
-    // real bloom curve. Kept low: additive bloom compounds, and the enemy
-    // silhouettes have to stay legible at the exact moment the screen is
-    // brightest, which is the moment the player is deciding where to go next.
-    ctx.globalAlpha = clamp(0.25 + speed * 0.08, 0, 1);
-    ctx.drawImage(this.bloom, -7, -7, view.w + 14, view.h + 14);
-    ctx.globalAlpha = clamp(0.12 + speed * 0.05, 0, 1);
-    ctx.drawImage(this.bloom, 0, 0, view.w, view.h);
+    if (Q.bloom > 0) {
+      this.buildBloom(speed * 0.6 + j.flash);
+      ctx.globalCompositeOperation = 'lighter';
+      // Two draws — a wide soft halo, then a tighter brighter core — read as a
+      // real bloom curve. Kept low: additive bloom compounds, and the enemy
+      // silhouettes have to stay legible at the exact moment the screen is
+      // brightest, which is the moment the player is deciding where to go next.
+      ctx.globalAlpha = clamp(0.25 + speed * 0.08, 0, 1);
+      ctx.drawImage(this.bloom, -7, -7, view.w + 14, view.h + 14);
+      if (Q.bloom > 1) {
+        ctx.globalAlpha = clamp(0.12 + speed * 0.05, 0, 1);
+        ctx.drawImage(this.bloom, 0, 0, view.w, view.h);
+      }
+    }
     ctx.restore();
 
     // Vignette. Drawn after bloom so the corners actually stay dark.
-    const g = ctx.createRadialGradient(
-      view.w * 0.5, view.h * 0.5, Math.min(view.w, view.h) * 0.26,
-      view.w * 0.5, view.h * 0.5, Math.max(view.w, view.h) * 0.78,
-    );
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, `rgba(0,0,0,${0.5 + game.aimBlend * 0.22})`);
-    ctx.fillStyle = g;
+    //
+    // Built once per window size and modulated with `globalAlpha` rather than
+    // rebuilt whenever the aim depth changes: scaling every stop by a constant
+    // is exactly what globalAlpha does, so this is the same image without a new
+    // gradient object and a fresh ramp evaluation every frame.
+    const key = `${view.w}x${view.h}`;
+    if (this.vignetteKey !== key || !this.vignette) {
+      const g = ctx.createRadialGradient(
+        view.w * 0.5, view.h * 0.5, Math.min(view.w, view.h) * 0.26,
+        view.w * 0.5, view.h * 0.5, Math.max(view.w, view.h) * 0.78,
+      );
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,1)');
+      this.vignette = g;
+      this.vignetteKey = key;
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.5 + game.aimBlend * 0.22;
+    ctx.fillStyle = this.vignette;
     ctx.fillRect(0, 0, view.w, view.h);
+    ctx.restore();
 
     if (j.flash > 0.002) {
       ctx.save();
@@ -236,16 +253,39 @@ export class PostFX {
     }
   }
 
+  /**
+   * One tile of the scanline pattern, built at device resolution so the lines
+   * land on whole pixels instead of being resampled into a grey wash.
+   */
+  private ensureScanline(ctx: CanvasRenderingContext2D) {
+    const dpr = Math.max(1, Math.round(view.dpr));
+    const pitch = 3 * dpr;
+    if (!this.scanTile || this.scanTile.height !== pitch) {
+      const c = makeCanvas(4, pitch);
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#000';
+      g.fillRect(0, 0, 4, dpr);
+      this.scanTile = c;
+      this.scanPattern = null;
+    }
+    if (!this.scanPattern) this.scanPattern = ctx.createPattern(this.scanTile, 'repeat');
+    return this.scanPattern;
+  }
+
   /** Grain + scanlines over everything, last. */
   finish(ctx: CanvasRenderingContext2D, game: Game) {
+    // Two fullscreen passes, one of them a blend mode that has to read the
+    // frame back. It is the first thing worth losing on a machine that is
+    // struggling, and the last thing anyone would notice missing.
+    if (!quality.current.grain) return;
     this.grainPhase = (this.grainPhase + 11) % 160;
 
     ctx.save();
     ctx.globalCompositeOperation = 'overlay';
     ctx.globalAlpha = 0.042 + game.player.speedNorm * 0.03;
-    const p = ctx.createPattern(this.grain, 'repeat');
-    if (p) {
-      ctx.fillStyle = p;
+    if (!this.grainPattern) this.grainPattern = ctx.createPattern(this.grain, 'repeat');
+    if (this.grainPattern) {
+      ctx.fillStyle = this.grainPattern;
       ctx.translate(-this.grainPhase, (this.grainPhase * 1.7) % 160);
       ctx.fillRect(0, 0, view.w + 160, view.h + 160);
     }
@@ -253,11 +293,23 @@ export class PostFX {
 
     // 3px pitch, very low contrast: enough to read as a screen, not enough to
     // fight the art or moire at odd device ratios.
-    ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = 0.1;
-    ctx.fillStyle = '#000';
-    for (let y = 0; y < view.h; y += 3) ctx.fillRect(0, y, view.w, 1);
-    ctx.restore();
+    //
+    // A tiled pattern rather than a loop of hairlines. Three hundred separate
+    // rects is three hundred draw calls a mobile GPU does not need to make, and
+    // it buys nothing a four-pixel tile does not.
+    //
+    // `source-over`, not `multiply`: the source here is pure black, and
+    // `black * dst` composited at alpha a is `(1-a)*dst` — the exact result of
+    // painting black over it at the same alpha. Identical image, no readback.
+    const scan = this.ensureScanline(ctx);
+    if (scan) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 0.1;
+      ctx.fillStyle = scan;
+      ctx.fillRect(0, 0, view.w * view.dpr, view.h * view.dpr);
+      ctx.restore();
+    }
   }
 }

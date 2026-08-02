@@ -4,6 +4,7 @@ import { ENEMY_COL, type Game } from '../game/game';
 import { ORB_R, WARD_ARC, type Enemy } from '../game/enemies';
 import type { StrikePlan } from '../game/strike';
 import { view } from '../viewport';
+import { drawRadial, radialSprite } from './glow';
 import { drawVec, vecWidth } from './text';
 
 /**
@@ -16,6 +17,25 @@ import { drawVec, vecWidth } from './text';
  */
 
 const GRID = 62;
+
+/**
+ * The soft light in this game is all the same shape: a radial falloff, at some
+ * size, in some colour. Baking each one into a sprite once turns a per-frame
+ * gradient build plus a shaded fill into a single scaled blit — and there is
+ * one of these behind every enemy, every orb, and the ship.
+ */
+const haloSprite = (col: RGB) =>
+  radialSprite(`halo${col}`, [
+    [0, rgba(col, 0.24)],
+    [0.5, rgba(col, 0.07)],
+    [1, rgba(col, 0)],
+  ]);
+
+const glowSprite = (col: RGB, inner: number) =>
+  radialSprite(`glow${col}:${inner}`, [
+    [0, rgba(col, inner)],
+    [1, rgba(col, 0)],
+  ]);
 
 export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   drawBackdrop(ctx, game);
@@ -44,20 +64,29 @@ export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
 }
 
 // ------------------------------------------------------------------ backdrop
+let spill: CanvasGradient | null = null;
+let spillKey = '';
+
 function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
   const { padX, padY, arenaW, arenaH, fullW, fullH } = view;
   ctx.fillStyle = rgba(COL.void, 1);
   ctx.fillRect(-padX, -padY, fullW, fullH);
 
   // A very soft bloom of the arena's own light spilling into the surround.
-  const cx = arenaW * 0.5;
-  const cy = arenaH * 0.5;
-  const r = Math.max(arenaW, arenaH) * 0.86;
-  const gr = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
-  gr.addColorStop(0, rgba(COL.grid, 0.2));
-  gr.addColorStop(0.55, rgba(COL.grid, 0.06));
-  gr.addColorStop(1, rgba(COL.void, 0));
-  ctx.fillStyle = gr;
+  // Fixed in arena units, so it only has to be rebuilt when the arena resizes.
+  const key = `${arenaW.toFixed(1)}x${arenaH.toFixed(1)}`;
+  if (spillKey !== key || !spill) {
+    const cx = arenaW * 0.5;
+    const cy = arenaH * 0.5;
+    const r = Math.max(arenaW, arenaH) * 0.86;
+    const gr = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
+    gr.addColorStop(0, rgba(COL.grid, 0.2));
+    gr.addColorStop(0.55, rgba(COL.grid, 0.06));
+    gr.addColorStop(1, rgba(COL.void, 0));
+    spill = gr;
+    spillKey = key;
+  }
+  ctx.fillStyle = spill;
   ctx.fillRect(-padX, -padY, fullW, fullH);
 
   // Surround texture: long faint diagonals, drifting. Gives the void a sense of
@@ -106,11 +135,7 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.beginPath();
   ctx.arc(p.x, p.y, lightR, 0, TAU);
   ctx.clip();
-  const pool = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, lightR);
-  pool.addColorStop(0, rgba(COL.gridHot, 0.16));
-  pool.addColorStop(1, rgba(COL.gridHot, 0));
-  ctx.fillStyle = pool;
-  ctx.fillRect(p.x - lightR, p.y - lightR, lightR * 2, lightR * 2);
+  drawRadial(ctx, glowSprite(COL.gridHot, 0.16), p.x, p.y, lightR);
   ctx.strokeStyle = rgba(COL.gridHot, 0.34);
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -237,13 +262,7 @@ function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alph
   // Every enemy gets a soft additive halo so the swarm reads as light sources
   // in a dark room rather than as decals lying on the floor.
   ctx.globalCompositeOperation = 'lighter';
-  const hr = e.r * 2.5;
-  const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, hr);
-  halo.addColorStop(0, rgba(col, 0.24 * alpha));
-  halo.addColorStop(0.5, rgba(col, 0.07 * alpha));
-  halo.addColorStop(1, rgba(col, 0));
-  ctx.fillStyle = halo;
-  ctx.fillRect(-hr, -hr, hr * 2, hr * 2);
+  drawRadial(ctx, haloSprite(col), 0, 0, e.r * 2.5, alpha);
   ctx.globalCompositeOperation = 'source-over';
 
   ctx.lineWidth = 2.4;
@@ -402,11 +421,7 @@ function drawOrbs(ctx: CanvasRenderingContext2D, game: Game) {
     if (!o.alive) continue;
     const pulse = 1 + Math.sin(o.age * 9) * 0.12;
     ctx.globalCompositeOperation = 'lighter';
-    const gr = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, ORB_R * 3);
-    gr.addColorStop(0, rgba(COL.spine, 0.42));
-    gr.addColorStop(1, rgba(COL.spine, 0));
-    ctx.fillStyle = gr;
-    ctx.fillRect(o.x - ORB_R * 3, o.y - ORB_R * 3, ORB_R * 6, ORB_R * 6);
+    drawRadial(ctx, glowSprite(COL.spine, 0.42), o.x, o.y, ORB_R * 3);
     ctx.globalCompositeOperation = 'source-over';
 
     ctx.strokeStyle = rgba(COL.spine, 0.95);
@@ -633,11 +648,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, game: Game) {
   // Aura.
   ctx.globalCompositeOperation = 'lighter';
   const auraR = PLAYER_R * (3 + p.charge * 2.4 + p.stretch * 2);
-  const aura = ctx.createRadialGradient(0, 0, 0, 0, 0, auraR);
-  aura.addColorStop(0, rgba(COL.player, 0.36 * alpha));
-  aura.addColorStop(1, rgba(COL.player, 0));
-  ctx.fillStyle = aura;
-  ctx.fillRect(-auraR, -auraR, auraR * 2, auraR * 2);
+  drawRadial(ctx, glowSprite(COL.player, 0.36), 0, 0, auraR, alpha);
 
   // Charge ring while aiming: a tightening circle, plus ticks that spin up.
   if (p.charge > 0.02) {

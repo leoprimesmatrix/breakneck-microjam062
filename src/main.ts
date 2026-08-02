@@ -1,8 +1,9 @@
 import { Input } from './engine/input';
 import { Game } from './game/game';
 import { solveStrike } from './game/strike';
-import { render } from './render/renderer';
+import { render, skip, stages, toggleStats } from './render/renderer';
 import { resetHud } from './render/hud';
+import { quality } from './render/quality';
 import { updateViewport, view } from './viewport';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -39,10 +40,12 @@ const FIXED_DT = 1 / 120;
 const MAX_STEPS = 8;
 
 function sizeCanvas() {
-  const dpr = Math.min(devicePixelRatio || 1, 2);
   const w = innerWidth || document.documentElement.clientWidth || 0;
   const h = innerHeight || document.documentElement.clientHeight || 0;
   if (w <= 0 || h <= 0) return false;
+  // Resolution is a quality setting like any other, and the one with the
+  // steepest cost curve: every pass in the post chain is per-pixel.
+  const dpr = quality.dprFor(w, h, devicePixelRatio || 1);
 
   const prevW = view.arenaW;
   const prevH = view.arenaH;
@@ -77,6 +80,7 @@ addEventListener('pointerdown', unlock);
 
 addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') game.audio.toggleMute();
+  if (e.code === 'KeyF') toggleStats();
 });
 
 // A tab that loses focus mid-run should not come back to a dead player.
@@ -95,6 +99,10 @@ if (import.meta.env.DEV) {
   w.__input = input;
   w.__view = view;
   w.__render = () => render(ctx, game);
+  w.__ctx = ctx;
+  w.__stages = stages;
+  w.__skip = skip;
+  w.__quality = quality;
   w.__advance = (seconds: number) => {
     const n = Math.round(seconds * 120);
     for (let k = 0; k < n; k++) game.step(FIXED_DT);
@@ -120,6 +128,9 @@ function frame(now: number) {
   // Clamp so an alt-tab or a stalled tab never fast-forwards the run.
   let elapsed = (now - last) / 1000;
   last = now;
+  // Reported before the clamp: the governor needs to see the real frame, and
+  // it has its own opinion about which deltas are evidence and which are stalls.
+  quality.sample(elapsed);
   if (elapsed > 0.25) elapsed = 0.25;
 
   acc += elapsed;

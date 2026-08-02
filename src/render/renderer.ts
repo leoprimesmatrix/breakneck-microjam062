@@ -4,8 +4,10 @@ import type { Game } from '../game/game';
 import { view } from '../viewport';
 import { drawHud } from './hud';
 import { PostFX } from './postfx';
+import { quality } from './quality';
 import { drawScene } from './scene';
 import { drawScreens } from './screens';
+import { drawUI, mono, uiWidth } from './text';
 
 /**
  * Frame assembly, in the order that matters:
@@ -19,18 +21,78 @@ import { drawScreens } from './screens';
 
 const fx = new PostFX();
 
+/**
+ * Stage suppression, for attributing a frame's cost by difference. Timing a
+ * stage in isolation lies badly for the blend-mode passes — run twenty of them
+ * back to back with no opaque draw in between and every one has to read the
+ * previous result back. The only honest measurement is a whole frame with one
+ * stage removed. Folds away in a build.
+ */
+export const skip = new Set<string>();
+const off = (s: string) => import.meta.env.DEV && skip.has(s);
+
 export function render(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
 
   const scene = fx.begin(game);
-  drawScene(scene, game);
+  if (!off('scene')) drawScene(scene, game);
 
-  fx.composite(ctx, game);
-  if (game.state === 'play' || game.state === 'paused') drawHud(ctx, game);
-  drawScreens(ctx, game);
-  fx.finish(ctx, game);
-  drawCursor(ctx, game);
+  if (!off('composite')) fx.composite(ctx, game);
+  if (!off('hud') && (game.state === 'play' || game.state === 'paused')) drawHud(ctx, game);
+  if (!off('screens')) drawScreens(ctx, game);
+  if (!off('finish')) fx.finish(ctx, game);
+  if (!off('cursor')) drawCursor(ctx, game);
+  if (showStats) drawStats(ctx);
 }
+
+// ---------------------------------------------------------------- diagnostics
+let showStats = false;
+
+/** Bound to `F`. Off by default; nobody should have to look at this to play. */
+export function toggleStats() {
+  showStats = !showStats;
+}
+
+/**
+ * Frame time and the tier the governor has settled on. Worth shipping rather
+ * than keeping behind a dev flag: "it runs badly" is the one bug report that
+ * cannot be acted on without knowing which of those two numbers is wrong.
+ */
+function drawStats(ctx: CanvasRenderingContext2D) {
+  const ms = quality.smoothMs;
+  const text = `${Math.round(1000 / Math.max(0.1, ms))} FPS   ${ms.toFixed(1)} MS   Q${quality.level + 1}/${quality.tiers}`;
+  const y = view.h - 12;
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  const w = uiWidth(ctx, text, { size: 11, font: mono, tracking: 1 });
+  ctx.fillStyle = rgba(COL.void, 0.72);
+  ctx.fillRect(8, y - 15, w + 16, 21);
+  drawUI(ctx, text, 16, y, {
+    size: 11,
+    font: mono,
+    tracking: 1,
+    color: rgba(ms > 20 ? COL.warn : COL.focus, 0.95),
+  });
+  ctx.restore();
+}
+
+/**
+ * Individually callable stages, for measuring where a frame actually goes.
+ * `import.meta.env.DEV` is statically false in a build, so the whole object —
+ * and the only reason `drawScene` and friends are reachable from outside this
+ * module — disappears from the bundle.
+ */
+export const stages = import.meta.env.DEV
+  ? {
+      scene: (_ctx: CanvasRenderingContext2D, game: Game) => drawScene(fx.begin(game), game),
+      composite: (ctx: CanvasRenderingContext2D, game: Game) => fx.composite(ctx, game),
+      hud: (ctx: CanvasRenderingContext2D, game: Game) => drawHud(ctx, game),
+      screens: (ctx: CanvasRenderingContext2D, game: Game) => drawScreens(ctx, game),
+      finish: (ctx: CanvasRenderingContext2D, game: Game) => fx.finish(ctx, game),
+      cursor: drawCursor,
+    }
+  : undefined;
 
 /**
  * A custom reticle. The native arrow cursor is the single loudest reminder that

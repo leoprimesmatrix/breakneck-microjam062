@@ -1,4 +1,6 @@
+import { CAN_BLUR, glowLayer } from './glow';
 import { glyphFor } from './glyphs';
+import { quality } from './quality';
 
 /**
  * Two typographic systems, used for different jobs.
@@ -41,6 +43,15 @@ const DEFAULT_TRACK = 0.09;
 const DEFAULT_WEIGHT = 0.115;
 
 /**
+ * How far glyph ink can stray outside the box implied by the cap height and the
+ * advance width, in em. `Q` and `,` hang below the baseline, and several glyphs
+ * are drawn wider than they advance so that tracked text sets tightly. The halo
+ * buffer is sized from these: get them wrong and a comma's tail loses its glow.
+ */
+const INK_DESCENT = 0.12;
+const INK_OVERHANG = 0.13;
+
+/**
  * Whether the primary input is a finger. Used only to choose wording — "TAP"
  * versus "CLICK" — but getting that wrong is the fastest way to make a game
  * feel like it was never tested on the device you are holding.
@@ -48,18 +59,6 @@ const DEFAULT_WEIGHT = 0.115;
 export const IS_TOUCH = (() => {
   try {
     return matchMedia('(pointer: coarse)').matches;
-  } catch {
-    return false;
-  }
-})();
-
-/** Canvas `filter` is near-universal but not guaranteed; probe it once. */
-const CAN_BLUR = (() => {
-  try {
-    const c = document.createElement('canvas').getContext('2d');
-    if (!c) return false;
-    c.filter = 'blur(1px)';
-    return c.filter !== 'none' && c.filter !== '';
   } catch {
     return false;
   }
@@ -112,54 +111,95 @@ export function drawVec(
   if (style.baseline === 'cap') py += size;
   else if (style.baseline === 'mid') py += size * 0.5;
 
-  let budget = progress >= 1 ? Infinity : penLength(text, size) * progress;
+  const budget = progress >= 1 ? Infinity : penLength(text, size) * progress;
+  // The caller's fade is a multiplier, not something to overwrite: a popup that
+  // sets globalAlpha on its way out has to actually go out.
+  const baseA = ctx.globalAlpha * (style.alpha ?? 1);
+  const glow = style.glow ?? 0;
 
   ctx.save();
   ctx.lineCap = 'butt';
   ctx.lineJoin = 'miter';
   ctx.miterLimit = 3;
-  if (style.alpha !== undefined) ctx.globalAlpha = style.alpha;
 
   /**
    * The halo is a genuine blur of the letterforms, not a fatter stroke behind
    * them. A fat stroke on a mitred monoline face grows spikes at every corner
    * and turns a word into a blob at exactly the sizes — headlines — where the
    * glow is wanted most.
+   *
+   * It is blurred inside a small buffer rather than on this canvas; see
+   * `glow.ts` for why that distinction is worth four frames a second each.
    */
-  const passes: { w: number; a: number; c: string; blur: number }[] = [];
-  const glow = style.glow ?? 0;
-  if (glow > 0) {
+  if (glow > 0 && quality.current.textGlow) {
     const gc = style.glowColor ?? style.color ?? '#fff';
-    if (CAN_BLUR) {
-      passes.push({ w: weight * 1.1, a: 0.4 * Math.min(1, glow), c: gc, blur: size * 0.22 * glow });
-      passes.push({ w: weight * 1.05, a: 0.34 * Math.min(1, glow), c: gc, blur: size * 0.07 * glow });
-    } else {
-      passes.push({ w: weight * (1 + 1.3 * glow), a: 0.07 * glow, c: gc, blur: 0 });
-      passes.push({ w: weight * (1 + 0.5 * glow), a: 0.1 * glow, c: gc, blur: 0 });
+    // Radius in *user* units. Canvas filters count device pixels, so leaving it
+    // in those would make the halo tighten as the display gets sharper.
+    const rad = size * 0.11 * glow;
+    const left = px - weight;
+    const top = py - size - weight;
+    const w = width + (Math.max(0, slant) + INK_OVERHANG) * size + weight * 2;
+    const h = size * (1 + INK_DESCENT) + weight * 2;
+
+    const drawn =
+      CAN_BLUR &&
+      glowLayer(ctx, left, top, w, h, rad * 3.2 + 2, baseA, (g, k) => {
+        g.lineCap = 'butt';
+        g.lineJoin = 'miter';
+        g.miterLimit = 3;
+        g.globalCompositeOperation = 'lighter';
+        g.strokeStyle = gc;
+        // A wide soft bed and a tight bright core: two radii read as a real
+        // falloff where one reads as a smudge.
+        for (const [wm, a, rm] of [[1.1, 0.4, 1], [1.05, 0.34, 0.32]] as const) {
+          g.filter = `blur(${Math.max(0.4, rad * rm * k).toFixed(2)}px)`;
+          g.globalAlpha = a * Math.min(1, glow);
+          g.lineWidth = weight * wm;
+          strokeRun(g, text, px, py, size, track, slant, budget);
+        }
+      });
+
+    if (!drawn) {
+      // No canvas filter, or a transform the buffer cannot represent. Fatter
+      // strokes at low alpha are not as good, but they are still a glow.
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = gc;
+      for (const [wm, a] of [[1 + 1.3 * glow, 0.07], [1 + 0.5 * glow, 0.1]] as const) {
+        ctx.globalAlpha = baseA * a * glow;
+        ctx.lineWidth = weight * wm;
+        strokeRun(ctx, text, px, py, size, track, slant, budget);
+      }
     }
   }
-  passes.push({ w: weight, a: 1, c: style.color ?? '#fff', blur: 0 });
 
-  for (let pass = 0; pass < passes.length; pass++) {
-    const P = passes[pass];
-    ctx.globalCompositeOperation = pass < passes.length - 1 ? 'lighter' : 'source-over';
-    ctx.filter = P.blur > 0.05 ? `blur(${P.blur.toFixed(2)}px)` : 'none';
-    ctx.strokeStyle = P.c;
-    ctx.lineWidth = P.w;
-    ctx.globalAlpha = (style.alpha ?? 1) * P.a;
-
-    let cx = px;
-    let left = budget;
-    for (const ch of text) {
-      const gl = glyphFor(ch);
-      if (left > 0) strokeGlyph(ctx, gl.p, cx, py, size, slant, left, (used) => (left -= used));
-      cx += (gl.a + track) * size;
-    }
-  }
-  ctx.filter = 'none';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = baseA;
+  ctx.strokeStyle = style.color ?? '#fff';
+  ctx.lineWidth = weight;
+  strokeRun(ctx, text, px, py, size, track, slant, budget);
 
   ctx.restore();
   return width;
+}
+
+/** Stroke a whole string, spending at most `budget` pixels of pen across it. */
+function strokeRun(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  px: number,
+  py: number,
+  size: number,
+  track: number,
+  slant: number,
+  budget: number,
+) {
+  let cx = px;
+  let left = budget;
+  for (const ch of text) {
+    const gl = glyphFor(ch);
+    if (left > 0) strokeGlyph(ctx, gl.p, cx, py, size, slant, left, (used) => (left -= used));
+    cx += (gl.a + track) * size;
+  }
 }
 
 /**
@@ -246,12 +286,42 @@ function fitStyle(ctx: CanvasRenderingContext2D, text: string, style: UIStyle): 
   return { ...style, size: style.size * k, tracking: (style.tracking ?? 0) * k };
 }
 
+/**
+ * Character advances, cached per font string.
+ *
+ * `measureText` shapes the run, and hand-tracked text needs every character
+ * measured twice — once to lay the line out, once while drawing it. Six short
+ * HUD labels were costing nearly two hundred shaping calls a frame. The faces
+ * are fixed, so an advance measured once is an advance forever.
+ */
+const advances = new Map<string, Map<string, number>>();
+
+/** Advance of one character in `font`, which must already be set on `ctx`. */
+function advance(ctx: CanvasRenderingContext2D, font: string, ch: string) {
+  let m = advances.get(font);
+  if (!m) {
+    // Sizes are continuous under a window resize, so the key space is not
+    // bounded on its own. Dropping the lot occasionally costs one frame of
+    // measuring and keeps this from growing without limit.
+    if (advances.size > 48) advances.clear();
+    m = new Map();
+    advances.set(font, m);
+  }
+  let w = m.get(ch);
+  if (w === undefined) {
+    w = ctx.measureText(ch).width;
+    m.set(ch, w);
+  }
+  return w;
+}
+
 export function uiWidth(ctx: CanvasRenderingContext2D, text: string, style: UIStyle) {
-  ctx.font = (style.font ?? ui)(style.size, style.weight ?? 600);
+  const font = (style.font ?? ui)(style.size, style.weight ?? 600);
+  ctx.font = font;
   const track = style.tracking ?? 0;
   if (!track) return ctx.measureText(text).width;
   let w = 0;
-  for (const ch of text) w += ctx.measureText(ch).width + track;
+  for (const ch of text) w += advance(ctx, font, ch) + track;
   return w - track;
 }
 
@@ -269,8 +339,9 @@ export function drawUI(
 ) {
   const style = fitStyle(ctx, text, raw);
   const track = style.tracking ?? 0;
+  const font = (style.font ?? ui)(style.size, style.weight ?? 600);
   ctx.save();
-  ctx.font = (style.font ?? ui)(style.size, style.weight ?? 600);
+  ctx.font = font;
   ctx.fillStyle = style.color ?? '#fff';
   if (style.alpha !== undefined) ctx.globalAlpha = style.alpha;
   ctx.textBaseline = 'alphabetic';
@@ -283,7 +354,7 @@ export function drawUI(
   } else {
     for (const ch of text) {
       ctx.fillText(ch, cx, y);
-      cx += ctx.measureText(ch).width + track;
+      cx += advance(ctx, font, ch) + track;
     }
   }
   ctx.restore();

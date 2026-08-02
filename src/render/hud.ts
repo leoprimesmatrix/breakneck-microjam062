@@ -10,6 +10,7 @@ import { TAU, clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine
 import { SPECS } from '../game/enemies';
 import { ENEMY_COL, pad, type Game } from '../game/game';
 import { view } from '../viewport';
+import { glowLayer } from './glow';
 import { IS_TOUCH, drawUI, drawVec, uiWidth, vecWidth } from './text';
 
 /**
@@ -107,20 +108,29 @@ function drawHull(
 
     // Parallelogram pips — the shear ties them to the italic display face.
     const sk = h * 0.42;
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.5 + sk, -h * 0.5);
-    ctx.lineTo(w * 0.5, -h * 0.5);
-    ctx.lineTo(w * 0.5 - sk, h * 0.5);
-    ctx.lineTo(-w * 0.5, h * 0.5);
-    ctx.closePath();
+    const path = (c: CanvasRenderingContext2D) => {
+      c.beginPath();
+      c.moveTo(-w * 0.5 + sk, -h * 0.5);
+      c.lineTo(w * 0.5, -h * 0.5);
+      c.lineTo(w * 0.5 - sk, h * 0.5);
+      c.lineTo(-w * 0.5, h * 0.5);
+      c.closePath();
+    };
+    path(ctx);
 
     if (filled) {
-      ctx.fillStyle = rgba(danger ? COL.danger : COL.hull, a);
+      const col = danger ? COL.danger : COL.hull;
+      ctx.fillStyle = rgba(col, a);
       ctx.fill();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = rgba(danger ? COL.danger : COL.hull, 0.28 * a);
-      ctx.filter = 'blur(4px)';
-      ctx.fill();
+      // The bloom around a lit pip, blurred in a buffer the size of the pip
+      // rather than the size of the screen.
+      const r = 4;
+      glowLayer(ctx, -w, -h, w * 2, h * 2, r * 3, 0.28 * a, (g, k) => {
+        g.filter = `blur(${Math.max(0.4, r * k).toFixed(2)}px)`;
+        g.fillStyle = rgba(col, 1);
+        path(g);
+        g.fill();
+      });
     } else {
       ctx.strokeStyle = rgba(COL.dim, 0.35 + pop * 0.65);
       ctx.lineWidth = 1.4 * S;
@@ -538,16 +548,27 @@ function drawWaveCard(ctx: CanvasRenderingContext2D, game: Game, cx: number, cy:
 }
 
 // -------------------------------------------------------------------- danger
+let edge: CanvasGradient | null = null;
+let edgeH = 0;
+
 function drawDangerEdge(ctx: CanvasRenderingContext2D, game: Game) {
   if (!game.inDanger) return;
-  const a = 0.1 + 0.1 * Math.sin(game.clock * 7);
-  const g = ctx.createLinearGradient(0, 0, 0, view.h);
-  g.addColorStop(0, rgba(COL.danger, a));
-  g.addColorStop(0.25, rgba(COL.danger, 0));
-  g.addColorStop(0.75, rgba(COL.danger, 0));
-  g.addColorStop(1, rgba(COL.danger, a));
-  ctx.fillStyle = g;
+  // Built at full strength once per window height and dimmed with globalAlpha;
+  // the pulse is a constant scale on every stop, which is what globalAlpha is.
+  if (!edge || edgeH !== view.h) {
+    const g = ctx.createLinearGradient(0, 0, 0, view.h);
+    g.addColorStop(0, rgba(COL.danger, 1));
+    g.addColorStop(0.25, rgba(COL.danger, 0));
+    g.addColorStop(0.75, rgba(COL.danger, 0));
+    g.addColorStop(1, rgba(COL.danger, 1));
+    edge = g;
+    edgeH = view.h;
+  }
+  ctx.save();
+  ctx.globalAlpha = 0.1 + 0.1 * Math.sin(game.clock * 7);
+  ctx.fillStyle = edge;
   ctx.fillRect(0, 0, view.w, view.h);
+  ctx.restore();
 }
 
 // ------------------------------------------------------------------ utilities
