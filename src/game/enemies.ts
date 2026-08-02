@@ -82,48 +82,78 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
  * ember, a sealed pod, an armoured prow, a swept interceptor, a bolted gun
  * housing — and the shatter inherits all of it for free.
  */
+/**
+ * Silhouette is the whole identity.
+ *
+ * The previous set were all convex lumps of roughly one size, and they read
+ * exactly as that: five small objects in five colours. Nothing in the outline
+ * said *what any of them was*. What separates recognisable shapes is not vertex
+ * count or interior detail — it is **aspect ratio and things that stick out**.
+ * A blob with a spike is a different animal from a blob; two blobs are the same
+ * animal twice.
+ *
+ * So the five below are deliberately spread across the whole range a shape can
+ * occupy: a jagged star, a tall ovoid, a squat pentagon that hides behind its
+ * own shield, a long needle, and a wide bolted drum. Each one is also drawn with
+ * appendages that break its convex hull — clamp arms, holder struts, splayed
+ * legs, a gun barrel — and those are in `bodies.ts` because the shatter should
+ * break the *body*, not the fittings.
+ */
 export function silhouette(kind: EnemyKind, r: number): [number, number][] {
   switch (kind) {
-    // A chipped shard of something still burning. Seven flanks, no two alike and
-    // no two parallel — a stone that was broken off, not cut.
+    // Shrapnel that is still burning: five spikes of five different lengths with
+    // deep notches between them. Nothing else on the field has a concave outline,
+    // which is exactly why this one is identifiable at any size.
     case 'mote':
+      // Spike lengths run 1.30, 1.04, 0.90, 0.76, 1.11 — the spread is the whole
+      // point. Five *even* spikes is a star, and a star reads as a pickup; five
+      // uneven ones read as something that was broken off something else.
       return [
-        [0, -r], [r * 0.44, -r * 0.52], [r * 0.62, r * 0.02], [r * 0.3, r * 0.58],
-        [-r * 0.18, r], [-r * 0.56, r * 0.34], [-r * 0.5, -r * 0.4],
+        [0, -r * 1.3], [r * 0.4, -r * 0.42], [r * 1.02, -r * 0.18], [r * 0.42, r * 0.26],
+        [r * 0.56, r * 0.7], [-r * 0.02, r * 0.4], [-r * 0.38, r * 0.66],
+        // One long straight run down the left flank: the face it was broken off
+        // along. Without it the outline is a five-pointed star, and a star reads
+        // as something you collect.
+        [-r * 0.86, r * 0.3], [-r * 1.08, -r * 0.28], [-r * 0.36, -r * 0.46],
       ];
-    // A sealed pod with a waist. The chamfers say it was manufactured with a
-    // bevel by someone; the pinch at the equator says the two halves come apart,
-    // which is the one thing the player needs to believe about it.
+    // A tall sealed ovoid — the only shape here that is noticeably taller than it
+    // is wide, and the only one with no straight edge at all. It is an egg, and
+    // it should be read as an egg before any of the detail resolves.
     case 'seeder':
       return [
-        [-r * 0.52, -r], [r * 0.52, -r], [r, -r * 0.46], [r * 0.86, 0], [r, r * 0.46],
-        [r * 0.52, r], [-r * 0.52, r], [-r, r * 0.46], [-r * 0.86, 0], [-r, -r * 0.46],
+        [0, -r * 1.12], [r * 0.52, -r * 0.86], [r * 0.72, -r * 0.24], [r * 0.66, r * 0.42],
+        [r * 0.34, r * 0.98], [0, r * 1.16], [-r * 0.34, r * 0.98], [-r * 0.66, r * 0.42],
+        [-r * 0.72, -r * 0.24], [-r * 0.52, -r * 0.86],
       ];
-    // An armoured shell: seven plates, deliberately off-balance, so it never
-    // resolves into the regular hexagon a generator would have produced.
+    // Small and compact on purpose. The ward's silhouette is mostly *shield*, and
+    // the body has to be visibly smaller than the slab it hides behind or the
+    // whole read — a thing cowering behind a wall — collapses.
     case 'ward':
       return [
-        [r * 1.04, 0], [r * 0.52, -r * 0.9], [-r * 0.46, -r * 0.94], [-r, -r * 0.3],
-        [-r * 0.86, r * 0.52], [-r * 0.1, r * 0.98], [r * 0.72, r * 0.62],
+        [r * 0.78, -r * 0.3], [r * 0.42, -r * 0.76], [-r * 0.3, -r * 0.8],
+        [-r * 0.76, -r * 0.22], [-r * 0.6, r * 0.52], [r * 0.08, r * 0.78],
+        [r * 0.7, r * 0.36],
       ];
-    // A swept interceptor: lance nose, forward canards, raked wings, and a deep
-    // notch either side where the intakes are cut into the body.
+    // A dart: twice as long as it is wide, with canards up front and raked fins
+    // at the tail. The one enemy whose outline states a heading, which is the one
+    // thing that matters about it. Kept *broad* through the middle — the first
+    // draft was a true needle and at this size a needle is a scribble.
     case 'lancer':
       return [
-        [r * 1.62, 0], [r * 0.6, -r * 0.22], [r * 0.22, -r * 0.52], [-r * 0.5, -r * 1.02],
-        [-r * 0.82, -r * 0.86], [-r * 0.34, -r * 0.26], [-r * 0.98, -r * 0.14],
-        [-r * 0.98, r * 0.14], [-r * 0.34, r * 0.26], [-r * 0.82, r * 0.86],
-        [-r * 0.5, r * 1.02], [r * 0.22, r * 0.52], [r * 0.6, r * 0.22],
+        [r * 1.65, 0], [r * 0.95, -r * 0.2], [r * 0.62, -r * 0.56], [r * 0.36, -r * 0.26],
+        [-r * 0.4, -r * 0.38], [-r * 0.86, -r * 0.98], [-r * 1.12, -r * 0.82],
+        [-r * 0.8, -r * 0.3], [-r * 1.2, -r * 0.18], [-r * 1.2, r * 0.18],
+        [-r * 0.8, r * 0.3], [-r * 1.12, r * 0.82], [-r * 0.86, r * 0.98],
+        [-r * 0.4, r * 0.38], [r * 0.36, r * 0.26], [r * 0.62, r * 0.56], [r * 0.95, r * 0.2],
       ];
-    // A gun housing bolted to the floor. A flattened dodecagon reads as a heavy
-    // machined casing; the anchor lugs are drawn separately, and stay put in the
-    // world while the housing above them turns.
+    // A wide, squat drum: heavy, flat-sided, and shorter than it is broad. It is
+    // the only body that reads as *installed* rather than as flying, which is the
+    // whole point of the species.
     case 'spine': {
       const pts: [number, number][] = [];
-      for (let i = 0; i < 12; i++) {
-        const a = (i / 12) * TAU + Math.PI / 12;
-        const k = i % 3 === 0 ? 0.78 : 0.96;
-        pts.push([Math.cos(a) * r * k, Math.sin(a) * r * k]);
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * TAU + Math.PI / 10;
+        pts.push([Math.cos(a) * r * 1.06, Math.sin(a) * r * 0.82]);
       }
       return pts;
     }

@@ -124,6 +124,47 @@ function run(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
 }
 
+/**
+ * Everything the airframe needs to know about itself. Deliberately not the
+ * `Player` — the title screen flies one of these across the wordmark and parks
+ * it in the rule as the maker's mark, and the emblem being the *actual ship*
+ * rather than a drawing of one is worth the small indirection.
+ */
+export interface ShipState {
+  /** 0..1 engine heat: plume length, shock diamonds, intake glow. */
+  thrust: number;
+  /** -1..1 roll. */
+  bank: number;
+  /** 0..1 elongation into the lance. */
+  stretch: number;
+  /** 0..1 aim charge: canopy and intakes brighten. */
+  charge: number;
+  alpha: number;
+  /** Free-running seconds, for exhaust flicker and the nav-light beat. */
+  clock: number;
+}
+
+const IDLE: ShipState = { thrust: 0, bank: 0, stretch: 0, charge: 0, alpha: 1, clock: 0 };
+
+/** The airframe alone, at any size, anywhere — no aura, no trail, no beam. */
+export function drawShip(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  angle: number,
+  r: number,
+  state: Partial<ShipState> = {},
+) {
+  const s = { ...IDLE, ...state };
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.scale(r, r);
+  drawExhaust(ctx, s);
+  drawHull(ctx, s);
+  ctx.restore();
+}
+
 export function drawPlayer(ctx: CanvasRenderingContext2D, game: Game) {
   const p = game.player;
   drawTrail(ctx, game);
@@ -131,21 +172,25 @@ export function drawPlayer(ctx: CanvasRenderingContext2D, game: Game) {
 
   const blink = p.iframe > 0 && Math.floor(game.clock * 22) % 2 === 0;
   const alpha = p.iframe > 0 ? (blink ? 0.35 : 0.95) : 1;
-  const thrust = Math.min(1, p.speed / 760);
 
   ctx.save();
   ctx.translate(p.x, p.y);
   ctx.rotate(p.angle);
-
   drawAura(ctx, game, alpha);
+  ctx.restore();
+
   // Drawn slightly larger than the collision radius. `PLAYER_R` is a hitbox and
   // has a balance meaning; how big the airframe *looks* is a separate question,
   // and an interceptor with this much structure in it needs the extra sixth to
   // resolve at the scale a laptop actually renders the arena at.
-  ctx.scale(PLAYER_R * VIS, PLAYER_R * VIS);
-  drawExhaust(ctx, game, thrust, alpha);
-  drawHull(ctx, game, alpha);
-  ctx.restore();
+  drawShip(ctx, p.x, p.y, p.angle, PLAYER_R * VIS, {
+    thrust: Math.min(1, p.speed / 760),
+    bank: p.bank,
+    stretch: p.stretch,
+    charge: p.charge,
+    alpha,
+    clock: game.clock,
+  });
 }
 
 // ---------------------------------------------------------------- afterimages
@@ -256,18 +301,12 @@ function drawAura(ctx: CanvasRenderingContext2D, game: Game, alpha: number) {
  * single most convincing detail on the ship: nothing decorative would ever put
  * *evenly spaced bright spots inside a flame*, so an eye reads them as physics.
  */
-function drawExhaust(
-  ctx: CanvasRenderingContext2D,
-  game: Game,
-  thrust: number,
-  alpha: number,
-) {
-  const p = game.player;
-  const heat = Math.max(thrust, p.stretch);
+function drawExhaust(ctx: CanvasRenderingContext2D, s: ShipState) {
+  const heat = Math.max(s.thrust, s.stretch);
   if (heat < 0.02) return;
-  const flick = 0.88 + 0.12 * Math.sin(game.clock * 41 + p.x * 0.05);
+  const flick = 0.88 + 0.12 * Math.sin(s.clock * 41);
   const len = (0.55 + heat * 3.4) * flick;
-  const a = alpha * (0.4 + heat * 0.6);
+  const a = s.alpha * (0.4 + heat * 0.6);
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -308,8 +347,8 @@ function drawExhaust(
 }
 
 // ----------------------------------------------------------------------- hull
-function drawHull(ctx: CanvasRenderingContext2D, game: Game, alpha: number) {
-  const p = game.player;
+function drawHull(ctx: CanvasRenderingContext2D, p: ShipState) {
+  const alpha = p.alpha;
 
   // Stretch into the lance, and roll into the drift. The Y squash reads as bank
   // on its own; the *sign* of it comes from the offsets below, which slide the
@@ -431,7 +470,7 @@ function drawHull(ctx: CanvasRenderingContext2D, game: Game, alpha: number) {
   // phase with each other because that is what they do, and the asymmetry is
   // free character — a symmetric ship with a symmetric blink is a diagram.
   drawRadial(ctx, flareSprite(COL.playerCore, 1), 1.48, lean * 0.2, 0.17, alpha);
-  const beat = (game.clock * 1.5) % 1;
+  const beat = (p.clock * 1.5) % 1;
   for (const [s, phase] of [[-1, 0], [1, 0.5]] as const) {
     const on = clamp01(1 - ((beat + phase) % 1) / 0.16);
     if (on <= 0.02) continue;

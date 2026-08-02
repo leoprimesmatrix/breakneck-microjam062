@@ -1,9 +1,11 @@
 import { COL, rgba } from '../config';
-import { clamp, clamp01, easeOutCubic, easeOutExpo, easeOutQuint } from '../engine/math';
+import { angleDelta, clamp, clamp01, easeOutCubic, easeOutExpo, easeOutQuint } from '../engine/math';
 import { ENEMY_COL, RANKS, pad, type Game } from '../game/game';
 import { SPECS } from '../game/enemies';
 import { view } from '../viewport';
+import { drawRadial, flareSprite } from './glow';
 import { drawEnemyIcon, group } from './hud';
+import { drawShip } from './ship';
 import { IS_TOUCH, drawUI, drawVec, fitVec, uiWidth, vecWidth } from './text';
 
 /**
@@ -61,11 +63,19 @@ interface Intro {
 function titleIntro(t: number): Intro {
   // Held for three frames at full, then a squared decay. A linear fade reads as
   // a dissolve; this reads as a flashbulb.
-  const blast = t < 0.05 ? 1 : Math.max(0, (1 - (t - 0.05) / 0.36) ** 2.2);
-  // The landing pop, timed to the moment the mark stops moving.
-  const land = clamp01(1 - Math.abs(t - 0.36) / 0.13) ** 2;
+  //
+  // Clamp *before* the exponent, not after: a negative base to a fractional
+  // power is NaN in JS, and `Math.max(0, NaN)` is NaN rather than 0. It happened
+  // to be harmless here because the draw is guarded by `> 0.002`, which NaN
+  // fails — but a value that silently turns into NaN a third of a second into
+  // every session is not something to leave lying around.
+  const blast = t < 0.05 ? 1 : clamp01(1 - (t - 0.05) / 0.36) ** 2.2;
+  // The landing pop, timed to the moment the mark stops moving. Short and low:
+  // it is punctuation on the slam, and anything longer just leaves a grey wash
+  // sitting over the first half of the ship's approach.
+  const land = clamp01(1 - Math.abs(t - 0.36) / 0.09) ** 2;
   return {
-    flash: Math.max(blast, land * 0.5),
+    flash: Math.max(blast, land * 0.42),
     bars: 1 - easeOutQuint(clamp01(t / 0.66)),
     punch: 1 - easeOutQuint(clamp01((t - 0.06) / 0.56)),
   };
@@ -92,6 +102,125 @@ function introStreaks(ctx: CanvasRenderingContext2D, t: number) {
     ctx.fillRect(x, y, len, 1 + seed * 2.4);
   }
   ctx.restore();
+}
+
+/** `titleTime` at which the ship enters frame, and at which it comes to rest. */
+const SHIP_IN = 0.3;
+const SHIP_LAND = 1.25;
+
+const bez = (a: number, b: number, c: number, d: number, u: number) => {
+  const v = 1 - u;
+  return v * v * v * a + 3 * v * v * u * b + 3 * v * u * u * c + u * u * u * d;
+};
+const bezD = (a: number, b: number, c: number, d: number, u: number) => {
+  const v = 1 - u;
+  return 3 * v * v * (b - a) + 6 * v * u * (c - b) + 3 * u * u * (d - c);
+};
+
+/**
+ * The ship's arrival.
+ *
+ * It enters off the right at speed, sweeps left beneath the wordmark, banks
+ * back through the bottom of the curve and settles into the break in the rule —
+ * where it stays, as the mark's emblem. Everything after it keys off the
+ * landing, so the title screen assembles itself *around the ship* rather than
+ * the ship being one more thing that fades in.
+ *
+ * The emblem was previously a little hand-drawn chevron. Using the real
+ * airframe costs nothing (`drawShip` already takes a position and a size) and
+ * means the thing sitting in the maker's mark is the thing you are about to fly.
+ *
+ * The trail is spindles rather than ghost copies of the hull, and that is not a
+ * shortcut: the hull's plates are opaque dark, so a fading ship leaves a *dark*
+ * smear across the wordmark it is passing over. Light-only afterimages are both
+ * correct and what the ship leaves in the arena anyway.
+ */
+function drawApproach(
+  ctx: CanvasRenderingContext2D,
+  game: Game,
+  cx: number,
+  ruleY: number,
+  S: number,
+) {
+  const t = game.titleTime;
+  if (t < SHIP_IN) return;
+
+  const R = 10 * S;
+  // Smoothstep, not an ease-out. An ease-out spends nine tenths of the flight in
+  // the first fifth of the time — the swoop is over before the eye finds it, and
+  // the rest is a crawl. Smoothstep accelerates in, holds a readable speed
+  // across the middle, and comes to a stop at the break, which is the whole
+  // brief: fly around, then get stuck there.
+  const k0 = clamp01((t - SHIP_IN) / (SHIP_LAND - SHIP_IN));
+  const u = k0 * k0 * (3 - 2 * k0);
+  const landed = t >= SHIP_LAND;
+  const restY = ruleY + 0.75 * S;
+
+  // Controls that pull hard past the ends, so a single cubic bends into an S:
+  // in from the right, all the way across to the left, down under the mark, then
+  // back right and level into the break. The final control sits *left* of the
+  // rest point on purpose — that is what makes it arrive nose-first pointing
+  // right, which is the direction the emblem has to sit.
+  const PX = [cx + view.w * 0.9, cx - view.w * 0.85, cx - view.w * 0.55, cx] as const;
+  const PY = [
+    ruleY - view.h * 0.3, ruleY - view.h * 0.3, ruleY + view.h * 0.28, restY,
+  ] as const;
+  const px = (k: number) => bez(PX[0], PX[1], PX[2], PX[3], k);
+  const py = (k: number) => bez(PY[0], PY[1], PY[2], PY[3], k);
+  const raw = (k: number) =>
+    Math.atan2(bezD(PY[0], PY[1], PY[2], PY[3], k), bezD(PX[0], PX[1], PX[2], PX[3], k));
+  // Level off into the landing: the tail of the curve still points slightly
+  // nose-up, and an emblem sitting crooked reads as a mistake rather than a pose.
+  const heading = (k: number) => raw(k) * (1 - clamp01((k - 0.72) / 0.28));
+
+  // Afterimages along the path already flown.
+  if (!landed) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 10; i >= 1; i--) {
+      const k = u - i * 0.022;
+      if (k <= 0) continue;
+      const gx = px(k);
+      const gy = py(k);
+      const fade = (1 - i / 11) ** 2 * 0.6 * (1 - u * 0.55);
+      const len = R * (3.4 - u * 1.9) * (1 - i * 0.045);
+      const wid = R * 0.5 * (1 - i * 0.06);
+      ctx.save();
+      ctx.translate(gx, gy);
+      ctx.rotate(raw(k));
+      ctx.fillStyle = rgba(COL.strike, fade);
+      ctx.beginPath();
+      ctx.moveTo(len, 0);
+      ctx.lineTo(-len * 0.3, -wid);
+      ctx.lineTo(-len * 1.1, 0);
+      ctx.lineTo(-len * 0.3, wid);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // Bank from the curvature of the path: how fast the heading is turning.
+  const bank = landed
+    ? 0
+    : clamp(angleDelta(raw(Math.max(0, u - 0.03)), raw(Math.min(1, u + 0.03))) * 4, -1, 1);
+  const bob = landed ? Math.sin(game.clock * 1.7) * 1.1 * S : 0;
+
+  drawShip(ctx, px(u), py(u) + bob, heading(u), R * (2.3 - u * 1.3), {
+    thrust: landed ? 0.16 + 0.05 * Math.sin(game.clock * 3.1) : 1,
+    bank,
+    clock: game.clock,
+  });
+
+  // Touchdown: a flare where it put down, and the rule sweeps out of it.
+  const flare = clamp01(1 - (t - SHIP_LAND) / 0.45);
+  if (landed && flare > 0.01) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    drawRadial(ctx, flareSprite(COL.strike, 0.9), cx, restY, 34 * S * (1.3 - flare), flare * flare * 0.9);
+    ctx.restore();
+  }
 }
 
 function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
@@ -240,7 +369,7 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
 
   // A highlight sweep that crosses the mark every few seconds.
   const sweep = (game.clock * 0.22) % 1;
-  if (sweep < 0.36 && t > 1.6) {
+  if (sweep < 0.36 && t > SHIP_LAND + 0.9) {
     const sx = cx - w * 0.6 + (sweep / 0.36) * w * 1.2;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -251,47 +380,23 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
     ctx.restore();
   }
 
-  // --- rule + tagline. The rule parts around the ship's own chevron — the
-  //     emblem sits in the break like a maker's mark set into an engraved line.
+  // --- the rule, and the ship that lands in the break of it. The rule sweeps
+  //     outward *from the touchdown*, so the line looks like it was drawn by the
+  //     thing that just arrived rather than scheduled independently of it.
   const ruleY = wy + size * 0.68;
-  const ruleP = stage(t, 0.55, 0.6);
+  const ruleP = stage(t, SHIP_LAND, 0.45);
   const half = w * 0.5 * ruleP;
-  const gapW = 24 * S;
+  const gapW = 22 * S;
   ctx.fillStyle = rgba(COL.wall, 0.45 * ruleP);
   if (half > gapW) {
     ctx.fillRect(cx - half, ruleY, half - gapW, 1.5 * S);
     ctx.fillRect(cx + gapW, ruleY, half - gapW, 1.5 * S);
   }
-  if (ruleP > 0.3) {
-    ctx.save();
-    ctx.globalAlpha = ruleP;
-    ctx.translate(cx, ruleY + 0.75 * S);
-    const es = 1.05 * S;
-    ctx.scale(es, es);
-    ctx.fillStyle = rgba(COL.playerCore, 0.95);
-    ctx.strokeStyle = rgba(COL.player, 0.9);
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(11, 0);
-    ctx.lineTo(-7, -7);
-    ctx.lineTo(-3.5, 0);
-    ctx.lineTo(-7, 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // Its own little strike line, trailing off to the left of the break.
-    ctx.strokeStyle = rgba(COL.strike, 0.55);
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(-19, 0);
-    ctx.lineTo(-10, 0);
-    ctx.stroke();
-    ctx.restore();
-  }
+  drawApproach(ctx, game, cx, ruleY, S);
 
   const tagY = ruleY + 30 * S;
   ctx.save();
-  ctx.globalAlpha = stage(t, 0.72, 0.5);
+  ctx.globalAlpha = stage(t, SHIP_LAND + 0.14, 0.5);
   drawUI(ctx, 'SPEED IS THE ONLY WEAPON YOU HAVE', cx, tagY, {
     size: 13 * S,
     weight: 700,
@@ -334,7 +439,7 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   const ry = tagY + 52 * S;
 
   for (let i = 0; i < rows.length; i++) {
-    const p = stage(t, 0.95 + i * 0.14, 0.55);
+    const p = stage(t, SHIP_LAND + 0.3 + i * 0.13, 0.55);
     if (p <= 0.001) continue;
     ctx.save();
     ctx.globalAlpha = p;
@@ -363,7 +468,7 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   //     tall that it would be marooned a long way below the controls.
   const rowsBottom = ry + rows.length * 34 * S;
   const promptY = Math.min(view.h - 74 * S, rowsBottom + 118 * S);
-  const pp = stage(t, 1.6, 0.6);
+  const pp = stage(t, SHIP_LAND + 0.8, 0.6);
   if (pp > 0.001) {
     const pulse = 0.6 + 0.4 * Math.sin(game.clock * 3.4);
     const label = IS_TOUCH ? 'TAP TO BEGIN' : 'CLICK TO BEGIN';
@@ -403,7 +508,7 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   // --- jam plate. Small print grounds a title screen in a real occasion the
   //     way a colophon grounds a book; its job is to be almost unnoticed.
   ctx.save();
-  ctx.globalAlpha = stage(t, 2.0, 0.7) * 0.55;
+  ctx.globalAlpha = stage(t, SHIP_LAND + 1.15, 0.7) * 0.55;
   drawUI(ctx, 'MICRO JAM 062  ·  THEME: SPEED', cx, view.h - 16 * S, {
     size: 9.5 * S,
     weight: 600,
@@ -417,7 +522,7 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   // --- records
   if (game.best > 0) {
     ctx.save();
-    ctx.globalAlpha = stage(t, 1.3, 0.6);
+    ctx.globalAlpha = stage(t, SHIP_LAND + 0.5, 0.6);
     drawUI(ctx, 'PERSONAL BEST', view.w * 0.5, 42 * S, {
       size: 10 * S,
       weight: 700,
