@@ -1,6 +1,7 @@
 import { Input } from './engine/input';
 import { Game } from './game/game';
 import { render } from './render/renderer';
+import { updateViewport, view } from './viewport';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d', { alpha: false })!;
@@ -19,7 +20,7 @@ if (import.meta.env.DEV) {
   const w = window as unknown as Record<string, unknown>;
   w.__game = game;
   w.__input = input;
-  w.__render = () => render(ctx, game, cssW, cssH, dpr);
+  w.__render = () => render(ctx, game);
   w.__advance = (seconds: number) => {
     const n = Math.round(seconds * 120);
     for (let k = 0; k < n; k++) game.step(FIXED_DT);
@@ -33,40 +34,38 @@ if (import.meta.env.DEV) {
 const FIXED_DT = 1 / 120;
 const MAX_STEPS = 8;
 
-let cssW = 0;
-let cssH = 0;
-let dpr = 1;
-
 /**
- * The canvas fills the window rather than being letterboxed to the shaft's
- * 540x760. The shaft is still authored at that size and is centred inside the
- * canvas by the renderer; the leftover width becomes the exterior. Letterboxing
- * left ~480px of dead black on either side of a desktop window, which is what
- * made the game read as a squashed strip.
+ * The playfield fills the window. `updateViewport` derives the logical field
+ * size and lane count from the canvas; everything downstream reads `view`.
  *
- * Idempotent and self-healing, and called every frame rather than only on the
- * `resize` event: itch.io embeds the game in an iframe that is commonly hidden
- * behind a "click to play" splash. The page then lays out at 0x0, and no resize
- * event fires when it is later revealed — so a one-shot resize leaves a
- * zero-sized canvas and the game renders nothing at all.
+ * Called every frame rather than only on the `resize` event: itch.io embeds the
+ * game in an iframe that is commonly hidden behind a "click to play" splash. The
+ * page then lays out at 0x0, and no resize event fires when it is later
+ * revealed — so a one-shot resize leaves a zero-sized canvas and the game
+ * renders nothing at all. Bailing on a zero measurement and re-checking each
+ * frame is what makes it come back.
  */
 function resize() {
-  const d = Math.min(devicePixelRatio || 1, 2);
+  const dpr = Math.min(devicePixelRatio || 1, 2);
   const availW = innerWidth || document.documentElement.clientWidth || 0;
   const availH = innerHeight || document.documentElement.clientHeight || 0;
-
-  // Not laid out yet. Leave the previous size alone and try again next frame.
   if (availW <= 0 || availH <= 0) return;
-  if (availW === cssW && availH === cssH && d === dpr) return;
 
-  cssW = availW;
-  cssH = availH;
-  dpr = d;
+  const prevCellW = view.cellW;
+  const prevCols = view.cols;
+  if (!updateViewport(availW, availH, dpr)) return;
 
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  canvas.style.width = `${view.w}px`;
+  canvas.style.height = `${view.h}px`;
+  canvas.width = Math.round(view.w * view.dpr);
+  canvas.height = Math.round(view.h * view.dpr);
+
+  // A mid-run resize changes the lane grid. Existing blocks were generated
+  // against the old one, so re-lay them or they hang in the air at stale
+  // positions the player can no longer reach.
+  if (prevCols !== view.cols || Math.abs(prevCellW - view.cellW) > 0.01) {
+    game.world.regrid(prevCellW, prevCols);
+  }
 }
 
 addEventListener('resize', resize);
@@ -89,10 +88,8 @@ let acc = 0;
 function frame(now: number) {
   requestAnimationFrame(frame);
 
-  // Cheap no-op when nothing changed; the safety net for hidden/late-laid-out
-  // iframes that never emit a resize event.
   resize();
-  if (cssW <= 0 || cssH <= 0) return;
+  if (view.w <= 0 || view.h <= 0) return;
 
   // Clamp so an alt-tab or a stalled tab never fast-forwards the run.
   let elapsed = (now - last) / 1000;
@@ -112,7 +109,7 @@ function frame(now: number) {
   // jitter never shows up as timing wobble.
   game.audio.tick();
 
-  render(ctx, game, cssW, cssH, dpr);
+  render(ctx, game);
 }
 
 requestAnimationFrame(frame);

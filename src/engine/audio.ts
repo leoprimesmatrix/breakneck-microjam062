@@ -29,7 +29,12 @@ export class Audio {
   private speedNorm = 0;
   private muted = false;
   private running = false;
-  private odActive = false;
+  private melting = false;
+  private heat = 0;
+  private redlining = false;
+  /** Continuous redline alarm — created lazily, held for the burn's duration. */
+  private alarmOsc: OscillatorNode | null = null;
+  private alarmGain: GainNode | null = null;
 
   /** Sequencer state. */
   private nextNoteTime = 0;
@@ -110,7 +115,12 @@ export class Audio {
     this.running = on;
     if (!this.ctx) return;
     this.musicBus.gain.setTargetAtTime(on ? 0.5 : 0, this.ctx.currentTime, 0.15);
-    if (!on) this.windGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+    if (!on) {
+      this.windGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+      // The burn alarm must not outlive the run that started it.
+      this.stopAlarm();
+      this.redlining = false;
+    }
   }
 
   setSpeed(norm: number) {
@@ -158,10 +168,11 @@ export class Audio {
   }
 
   /**
-   * @param chain  current chain length — drives the rising melodic run
-   * @param marginal 0..1 how close the break was to your ceiling
+   * @param chain    current chain length — drives the rising melodic run
+   * @param marginal 0..1 how close the break was to your heat ceiling
+   * @param material 0..3 — tougher material gets a lower, grittier body
    */
-  onBreak(chain: number, marginal: number, isGate: boolean) {
+  onBreak(chain: number, marginal: number, material: number, isGate: boolean) {
     if (!this.enabled || !this.running) return;
     const ctx = this.ctx!;
     const when = ctx.currentTime;
@@ -170,7 +181,8 @@ export class Audio {
     const idx = Math.min(chain, 40);
     const deg = PENTATONIC[idx % PENTATONIC.length];
     const oct = Math.min(Math.floor(idx / PENTATONIC.length), 4);
-    const freq = semitone(deg + oct * 12 + 24);
+    // Tougher material sits lower — glass tinkles, plate thuds.
+    const freq = semitone(deg + oct * 12 + 24 - material * 3);
 
     const osc = ctx.createOscillator();
     osc.type = 'triangle';
@@ -185,7 +197,9 @@ export class Audio {
     osc.stop(when + 0.24);
 
     // Marginal breaks get grit; trivial ones stay clean so plowing feels smooth.
-    if (marginal > 0.45 || isGate) {
+    // Grit on marginal breaks and on anything heavier than a grate; plain
+    // material stays clean so ploughing glass still feels smooth.
+    if (marginal > 0.45 || isGate || material >= 2) {
       this.noiseBurst(when, 0.1 + marginal * 0.12, 0.07, 1400 + marginal * 1800);
     }
     if (isGate) {
@@ -217,21 +231,59 @@ export class Audio {
     this.noiseBurst(when, 0.26, 0.16, 700, 'lowpass');
   }
 
-  onGraze() {
-    if (!this.enabled || !this.running) return;
-    const ctx = this.ctx!;
-    const when = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(2400, when);
-    const g = this.env(osc, 0.05, 0.001, 0.05, when);
-    g.connect(this.sfxBus);
-    osc.start(when);
-    osc.stop(when + 0.08);
+  /**
+   * Heat drives the mix. The redline gets a continuous alarm rather than a
+   * one-shot: the hull is burning for as long as you stay up there, and a
+   * single beep would let the player forget they are on fire.
+   */
+  setHeat(value: number, melting: boolean, redlining: boolean) {
+    this.heat = value;
+    this.melting = melting;
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    if (redlining && !this.redlining) this.startAlarm();
+    else if (!redlining && this.redlining) this.stopAlarm();
+    this.redlining = redlining;
+
+    if (this.alarmOsc && this.alarmGain) {
+      // Pitch and level ride how deep into the redline you are.
+      const over = Math.max(0, (value - 0.82) / 0.18);
+      this.alarmOsc.frequency.setTargetAtTime(320 + over * 190, t, 0.05);
+      this.alarmGain.gain.setTargetAtTime(0.03 + over * 0.05, t, 0.05);
+    }
   }
 
-  setOverdrive(on: boolean) {
-    this.odActive = on;
+  private startAlarm() {
+    if (!this.ctx || this.alarmOsc) return;
+    const ctx = this.ctx;
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 320;
+    // Tremolo via a second oscillator on the gain: a wavering tone reads as an
+    // alarm, a steady one reads as a synth pad.
+    const g = ctx.createGain();
+    g.gain.value = 0.0;
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 7;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.5;
+    lfo.connect(lfoGain).connect(g.gain);
+    osc.connect(g).connect(this.sfxBus);
+    osc.start();
+    lfo.start();
+    this.alarmOsc = osc;
+    this.alarmGain = g;
+  }
+
+  private stopAlarm() {
+    if (!this.ctx || !this.alarmOsc || !this.alarmGain) return;
+    const t = this.ctx.currentTime;
+    this.alarmGain.gain.setTargetAtTime(0, t, 0.05);
+    this.alarmOsc.stop(t + 0.3);
+    this.alarmOsc = null;
+    this.alarmGain = null;
   }
 
   /**
@@ -239,7 +291,7 @@ export class Audio {
    * whoosh. Loud, short, unmistakable — the audio has to confirm the state
    * change before the player has finished reading the word on screen.
    */
-  onOverdrive() {
+  onMeltdown() {
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const when = ctx.currentTime;
@@ -261,7 +313,7 @@ export class Audio {
     this.noiseBurst(when, 0.3, 0.45, 2600, 'highpass');
   }
 
-  onOverdriveEnd() {
+  onMeltdownEnd() {
     if (!this.enabled) return;
     const ctx = this.ctx!;
     const when = ctx.currentTime;
@@ -293,24 +345,25 @@ export class Audio {
   }
 
   /**
-   * Tier climbed. A tiny rising blip whose pitch tracks the new tier, so the
-   * ear learns the ladder even before the eye finds the badge. Down-shifts stay
-   * silent — losing speed already has bounce/brake feedback, and a sad blip on
-   * every marginal break would read as being punished for playing well.
+   * Crossed into a hotter band — a new material just became meltable. A short
+   * rising blip whose pitch tracks the band, so the ear learns the ladder
+   * without the eye leaving the shaft. Cooling stays silent: braking already has
+   * its own feedback, and a sad blip every time you vent would read as being
+   * punished for playing correctly.
    */
-  onPowerUp(tier: number) {
+  onBand(band: number) {
     if (!this.enabled || !this.running) return;
     const ctx = this.ctx!;
     const when = ctx.currentTime;
-    const f = 480 + tier * 85;
+    const f = 440 + band * 150;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(f * 0.8, when);
-    osc.frequency.exponentialRampToValueAtTime(f, when + 0.05);
-    const g = this.env(osc, 0.05, 0.004, 0.09, when);
+    osc.frequency.setValueAtTime(f * 0.78, when);
+    osc.frequency.exponentialRampToValueAtTime(f, when + 0.06);
+    const g = this.env(osc, 0.07, 0.004, 0.12, when);
     g.connect(this.sfxBus);
     osc.start(when);
-    osc.stop(when + 0.16);
+    osc.stop(when + 0.2);
   }
 
   onHeal() {
@@ -357,7 +410,7 @@ export class Audio {
     // Tempo rides velocity — the score accelerates because you do. Overdrive
     // shifts the whole sequencer up a gear so the payoff is audible, not just
     // a louder version of the same groove.
-    const bpm = (96 + this.speedNorm * 84) * (this.odActive ? 1.34 : 1);
+    const bpm = (96 + this.speedNorm * 84) * (this.melting ? 1.34 : 1);
     const stepDur = 60 / bpm / 2; // eighth notes
 
     const horizon = ctx.currentTime + 0.12;
@@ -404,8 +457,9 @@ export class Audio {
       osc.stop(when + 0.2);
     }
 
-    // Layer 3 — arpeggio, only at genuinely high speed.
-    if (n > 0.62 || this.odActive) {
+    // Layer 3 — arpeggio. Enters on speed OR heat, so a hot, controlled run
+    // sounds as intense as a reckless fast one.
+    if (n > 0.62 || this.heat > 0.55 || this.melting) {
       const deg = PENTATONIC[step % PENTATONIC.length];
       const osc = ctx.createOscillator();
       osc.type = 'square';
@@ -419,7 +473,7 @@ export class Audio {
     // Layer 4 — overdrive only: an octave-up lead doubling the arpeggio, plus a
     // hat on the off-beat. Exists purely so the payoff sounds like a different
     // piece of music rather than the same one with the gain up.
-    if (this.odActive) {
+    if (this.melting) {
       const deg = PENTATONIC[(step * 2) % PENTATONIC.length];
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';

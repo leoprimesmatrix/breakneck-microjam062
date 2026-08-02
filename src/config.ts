@@ -1,34 +1,21 @@
 /**
  * Every feel-critical number lives here so tuning is one file, not a scavenger hunt.
  * The jam is won or lost on these values, not on architecture.
+ *
+ * Playfield dimensions are NOT here — they are runtime values that depend on the
+ * window, and live in `viewport.ts`.
  */
-
-// ---------------------------------------------------------------- view
-/** The shaft. Gameplay is authored in this space and never changes size. */
-export const VIEW_W = 540;
-export const VIEW_H = 760;
-
-/**
- * The canvas is full-bleed; the shaft is centred inside it and the leftover
- * width becomes the surround. Letterboxing the shaft into dead black is what
- * made the game read as a squashed strip on a desktop monitor.
- */
-export const SURROUND_MIN = 0.06; // keep a sliver of surround even when tight
 
 /** Player sits this far down the screen; the rest is lookahead. */
 export const CAM_ANCHOR = 0.36;
 
 // ---------------------------------------------------------------- palette
-/**
- * Base ink. Biomes recolour everything on top of this (see `game/biomes.ts`);
- * these are the neutral fallbacks and the colours that never shift.
- */
 export const COL = {
   bg: '#06070C',
   fg: '#F4F6FF',
   hot: '#FF2E4C',
-  gold: '#FFC53D',
-  od: '#FFE27A', // overdrive
+  /** The one molten colour. Previously redeclared in five places, two variants. */
+  molten: [255, 214, 96],
 } as const;
 
 // ---------------------------------------------------------------- vertical physics
@@ -41,27 +28,13 @@ export const GRAVITY = 900; // px/s^2
  * Speed is governed by DRAG, not thrust. Posture changes your frontal area the
  * way a skydiver's does, and terminal velocity falls out of `sqrt(g / k)`.
  *
- * This is what stops the game playing itself. With no drag you pin the top tier
- * in two seconds of doing nothing; with drag, every tier above neutral has to be
- * earned by holding a tuck — which is exactly when you can barely steer.
+ *   neutral  ->  ~870 px/s
+ *   tuck     -> ~1545 px/s
+ *   brake    ->  ~330 px/s
  *
- *   neutral  ->  ~870 px/s  =  290 km/h  =  tier 4
- *   tuck     -> ~1545 px/s  =  515 km/h  =  tier 8
- *   brake    ->  ~330 px/s  =  110 km/h  =  tier 1
- *
- * The tuck terminal deliberately lands in tier 8, NOT tier 9.
- *
- * It used to sit at 1680 (tier 9), and that single number was why the game was
- * boring: holding W pinned the top tier, the top tier breaks literally
- * everything the generator can emit, and so there was never a block on screen
- * that had to be steered around. The entire premise — "fast enough to break
- * anything means unable to aim" — was never actually tested, because aiming was
- * optional.
- *
- * At tier 8 sustained, hardness-9 blocks are real walls. Tier 9 is reachable
- * only transiently: on the acceleration overshoot out of a gate, or by stacking
- * graze bonuses. That makes the top of the shaft a thing you visit, not a thing
- * you park in.
+ * These sit deliberately either side of the heat equilibrium (~827 px/s): a
+ * neutral fall drifts slowly hotter, a tuck cooks you, the air-brake dumps heat.
+ * Posture IS the thermostat.
  */
 export const DRAG_NEUTRAL = GRAVITY / (870 * 870);
 export const DRAG_TUCK = GRAVITY / (1545 * 1545);
@@ -69,179 +42,224 @@ export const DRAG_BRAKE = GRAVITY / (330 * 330);
 /** How fast the body changes shape between postures. */
 export const DRAG_SHIFT_RATE = 9;
 
-/**
- * Opening speed. This has swung both ways: 130 felt dead, so it went to 300 —
- * and at 300 the first blocks arrived before a new player had read a single
- * thing on screen, which made the whole game feel like being shot into a wall.
- *
- * The fix is not the number, it is what surrounds it: the run now opens with a
- * calibration stretch (soft, sparse blocks — see CALIBRATION_M) and an intro
- * card stating the goal, so a slow launch is spent *learning* rather than
- * waiting. 150 gives roughly three readable seconds before the first choice.
- */
 export const V_START = 150;
-
-/**
- * Depth (metres) of the on-ramp. Until here the generator emits only sparse
- * hardness 1-2 blocks — everything is breakable at neutral speed, so the first
- * lesson ("touch a block you outrun, it shatters") teaches itself before the
- * first block that can actually hurt shows up.
- */
-export const CALIBRATION_M = 260;
-
-/** Seconds the goal/intro card holds at the start of every run. */
-export const INTRO_TIME = 3;
 export const V_MAX = 1850; // hard ceiling; drag normally settles well below it
 /** Bounces are allowed to throw you upward; gravity always wins it back. */
 export const V_BOUNCE_CAP = -540;
 
-/** vy (px/s) -> km/h on the HUD. Tuned so V_MAX reads a bit over 600 km/h. */
+/** vy (px/s) -> km/h. Flavour readout only — it no longer decides anything. */
 export const KMH_PER_PX = 1 / 3;
 
+// ---------------------------------------------------------------- heat
 /**
- * Hardness tiers. tier = clamp(floor(kmh / KMH_PER_TIER), 1, 9)
- * A block breaks when tier >= hardness, so the speed readout *is* the damage number.
+ * THE mechanic. One resource with three jobs:
+ *
+ *   1. it is your weapon      — heat melts material, nothing else does
+ *   2. it is your score rate  — the multiplier rides the same dial
+ *   3. it is what kills you   — past the redline it burns through the hull
+ *
+ * This replaces the old speed-tier-versus-hardness-digit comparison, which asked
+ * the player to do arithmetic at 600 km/h and so was simply ignored — leaving
+ * "hold W" strictly optimal. Heat has a *continuous cost*, so max speed is no
+ * longer free, and the moment-to-moment question becomes "how long dare I stay
+ * hot?" instead of nothing at all.
  */
-export const KMH_PER_TIER = 60;
-export const MAX_TIER = 9;
+
+/** Heat gained per second at full speed. Quadratic in speed, like real drag heating. */
+export const HEAT_GAIN = 0.3;
+/**
+ * Passive bleed per second, always on.
+ *
+ * This value places the thermal equilibrium, and the placement is the single
+ * most important number in the game. gain = vent at speedNorm ~0.62, which sits
+ * ABOVE the neutral-posture terminal (0.47) and below the tuck terminal (0.83).
+ *
+ * That ordering is deliberate and load-bearing: a player who does nothing now
+ * *cools*, goes cold, cannot melt anything, and bounces off the first real
+ * barrier. Heat has to be actively dived for. At the first tuning pass the
+ * equilibrium sat just under neutral, so a bot pressing no keys at all drifted
+ * to full heat and outran a bot holding the dive — which is the same "the game
+ * plays itself" failure the redesign existed to remove.
+ */
+export const HEAT_VENT = 0.115;
+/** Braking vents hard — it is the deliberate cooling action. */
+export const BRAKE_VENT_MULT = 3.5;
+
+/**
+ * Smashing generates heat. This is the keystone of the whole redesign: ploughing
+ * through material is what drives you into the redline, so the "hold W and break
+ * everything" strategy now actively cooks the player who uses it.
+ */
+export const HEAT_PER_BREAK = 0.018;
+/** Tougher material dumps proportionally more heat into you. */
+export const HEAT_PER_BREAK_MAT = 0.5;
+
+/** Above this, the hull burns. */
+export const HEAT_REDLINE = 0.82;
+/**
+ * Hull pips per second lost in the redline. Climbing from the redline to a
+ * meltdown takes ~2s of diving, so at these rates a meltdown costs roughly one
+ * hull pip — it is bought, not found.
+ */
+export const REDLINE_DPS_MIN = 0.6;
+export const REDLINE_DPS_MAX = 1.3;
+
+/** Meltdown: heat hits 1.0. Melts anything, cannot be hurt. */
+export const MELTDOWN_TIME = 4;
+/**
+ * Heat left when a meltdown ends — just below the redline, NOT zero.
+ *
+ * Dumping to zero made overheating strictly free: the meltdown was a reward for
+ * hitting the ceiling and it wiped the danger on the way out, so the optimal
+ * line was to cook constantly and never think. Emerging still hot means the
+ * decision — dive back through the redline for another one, or vent and cool —
+ * lands immediately and repeatedly.
+ */
+export const MELTDOWN_END_HEAT = 0.68;
+/** Extra downward pull during meltdown — you accelerate through it. */
+export const MELTDOWN_GRAVITY = 520;
+
+/**
+ * Score multiplier at zero heat and at full heat. Risk and reward, one dial.
+ * Kept modest because it compounds with the chain — at 4x heat against a 15x
+ * chain the product was 60 and a single good run scored six figures.
+ */
+export const HEAT_MULT_COLD = 1;
+export const HEAT_MULT_HOT = 2;
+/**
+ * Meltdown multiplies on top of that — but only slightly.
+ *
+ * At 2x it compounded with heat (2.5) and chain (8) to 40x per break, while a
+ * meltdown also removes every reason to stop breaking. One lucky meltdown was
+ * worth five times an entire careful run, so score measured luck rather than
+ * skill. The meltdown's real reward is the four seconds of invulnerability and
+ * the CORE walls it opens, not a scoring windfall.
+ */
+export const MELTDOWN_MULT = 1.3;
+
+// ---------------------------------------------------------------- materials
+/**
+ * Barriers are made of something, not labelled with a number. Material is read
+ * from silhouette and opacity in peripheral vision — no focusing, no comparing,
+ * no arithmetic. That is the entire point.
+ */
+export type Material = 0 | 1 | 2 | 3;
+export const GLASS: Material = 0;
+export const GRATE: Material = 1;
+export const PLATE: Material = 2;
+export const CORE: Material = 3;
+
+/** Heat at which each material starts to melt. CORE needs a full meltdown. */
+export const MELT_AT: readonly number[] = [0, 0.25, 0.55, Infinity];
+
+export const MATERIAL_NAME = ['GLASS', 'GRATE', 'PLATE', 'CORE'] as const;
+
+/** Heat band names, aligned to the thresholds that unlock each material. */
+export const BANDS = [
+  { at: 0, name: 'COOL' },
+  { at: 0.25, name: 'WARM' },
+  { at: 0.55, name: 'HOT' },
+  { at: HEAT_REDLINE, name: 'SEARING' },
+] as const;
 
 // ---------------------------------------------------------------- lateral control
 /**
- * THE core mechanic: steering authority decays as speed rises.
- * Fast enough to break anything == barely able to aim.
+ * Authored in LANES per second, not pixels — see `viewport.ts`. The field is
+ * 7 lanes wide on a phone and 26 on a monitor; what has to stay constant is how
+ * fast you reach the *next* lane, because dodging is always a local decision.
+ *
+ * Authority still decays with speed: fast enough to melt anything means barely
+ * able to aim.
  */
-export const LAT_ACCEL_SLOW = 3600;
-export const LAT_ACCEL_FAST = 1050;
-export const LAT_MAX_SLOW = 440;
-export const LAT_MAX_FAST = 170;
+export const LAT_LANES_SLOW = 7.3;
+export const LAT_LANES_FAST = 2.8;
+export const LAT_ACCEL_LANES_SLOW = 60;
+export const LAT_ACCEL_LANES_FAST = 17.5;
 /** Exponential damping applied to lateral velocity each second. */
 export const LAT_DAMP = 7.5;
 
 // ---------------------------------------------------------------- impacts
 /**
- * Speed retained on a break, scaled by how marginal the break was.
- * Smashing a 1 at tier 9 is nearly free — that's the power fantasy. Smashing a 9
- * at tier 9 costs real momentum — that's the tension. A single flat cost gave
- * neither, and made high density mathematically unsurvivable.
+ * Speed retained on a break, by how tough the material was relative to your heat.
+ * Melting GLASS while searing is nearly free — that is the power fantasy.
+ * Melting PLATE the instant you can costs real momentum — that is the tension.
  */
-export const BREAK_KEEP_EASY = 0.995; // hardness far below your tier
-/**
- * At 0.9 a marginal break barely dented momentum, drag restored it inside a
- * third of a second, and ploughing had no downside. The cost has to be steep
- * enough that a run of hard breaks visibly drops you a tier — that drop is what
- * turns the world red again and forces the player back to steering.
- */
+export const BREAK_KEEP_EASY = 0.995;
 export const BREAK_KEEP_HARD = 0.84;
-/** Fraction retained when you bounce off something too hard. */
-export const BOUNCE_SPEED_KEEP = 0.45;
-/** Upward kick on a failed impact, px/s. */
-export const BOUNCE_KICK = 260;
-/** Seconds of invulnerability after taking a hit. */
-export const IFRAME_TIME = 0.9;
-
+/** Fraction of speed retained when you bounce off something you cannot melt. */
+export const BOUNCE_SPEED_KEEP = 0.3;
+/** Floor so a bounce never stalls you; you keep falling, just slowly. */
+export const BOUNCE_MIN_VY = 180;
 /**
- * Four, not three. Measured runs were ending at 13-16 seconds, which is too
- * short to reach the second zone, see overdrive more than once, or feel like a
- * run at all — a score-attack game needs long enough for a story to develop.
+ * Seconds of invulnerability after taking a hit. This is the only window in
+ * which a run can be rebuilt, so it has to be long enough to actually
+ * re-accelerate — at 0.9s the player was still slow when it expired and simply
+ * bounced again.
  */
+export const IFRAME_TIME = 1.1;
+
 export const MAX_HEALTH = 4;
 
 // ---------------------------------------------------------------- world grid
-export const COLS = 9;
-export const CELL_W = VIEW_W / COLS; // 60
-export const CELL_H = 46;
+/**
+ * Row height. Raised from 46: with lanes widening to ~90 units on a desktop,
+ * a 46-tall barrier is a 2:1 sliver and adjacent ones merge into a single
+ * featureless band. Taller blocks keep the material signatures legible.
+ */
+export const CELL_H = 58;
 
 /** Vertical gap between generated rows, eased down as the run gets deeper. */
 export const ROW_GAP_START = 132;
 export const ROW_GAP_END = 98;
-/**
- * Depth (metres) at which the generator reaches full intensity.
- * A strong run reaches ~3200m, so ramping over 5200 meant the player never met
- * the hard content at all: at 1000m everything was still hardness 1-3 and
- * nothing on screen was ever red.
- */
+/** Depth (metres) at which the generator reaches full density. */
 export const RAMP_DEPTH = 3600;
-
-/**
- * Hardness ramps on its own, much shorter curve. Sharing the density ramp meant
- * blocks only reached 6 by the depth a good run ends, while the player sits at
- * tier 7-9 — so nothing on screen was ever red and the threat never materialised.
- * Hardness has to outrun reachable tier early for the world to recolour at all.
- */
-export const HARD_RAMP_DEPTH = 2400;
+/** Material toughness ramps on its own, shorter curve. */
+export const MATERIAL_RAMP_DEPTH = 2400;
 
 /** Fraction of columns filled, at the start and at full intensity. */
 export const DENSITY_START = 0.5;
 export const DENSITY_END = 0.68;
 
-/** A full-width skill-check wall every this many metres. */
+/** A full-width CORE wall every this many metres. Meltdown or bust. */
 export const GATE_EVERY_M = 500;
 
-// ---------------------------------------------------------------- zones
 /**
- * The shaft changes character every ZONE_DEPTH metres. Purely presentational,
- * but it is what converts "a number going up" into "somewhere I am travelling
- * to" — the run now has chapters, and each one announces itself.
+ * Depth of the on-ramp. Until here the generator emits only sparse GLASS, so the
+ * first thing a new player does is melt something by accident and get the whole
+ * premise for free.
  */
+export const CALIBRATION_M = 260;
+
+/** Seconds the goal card holds at the start of every run. */
+export const INTRO_TIME = 3;
+
+// ---------------------------------------------------------------- zones
 export const ZONE_DEPTH = 700;
-/** Seconds the zone name card stays up. */
 export const ZONE_CARD_TIME = 2.5;
 
 // ---------------------------------------------------------------- player
-export const PLAYER_R = 11;
+// Ship radius is NOT here — it scales with lane width so the ship occupies the
+// same share of a lane at 7 lanes and at 14. See `view.playerR` in viewport.ts.
 
 // ---------------------------------------------------------------- scoring
-/** Near-miss distance, in px, that counts as a GRAZE. */
-export const GRAZE_DIST = 18;
-/** Chain length that refunds a health pip. */
-export const CHAIN_HEAL_AT = 10;
 /**
- * Seconds without a break before the chain lapses. Rows arrive every 0.1-0.6s at
- * speed, so this has to be tight: at 2.6s the chain never lapsed and simply
- * counted run length. Under a second, threading empty air costs you the combo,
- * which is what makes smashing a choice rather than a side effect.
+ * Chain length that repairs a hull pip. Raised from 10: with the redline now
+ * bleeding hull continuously, healing every ten breaks refunded the burn faster
+ * than it could be spent and the redline stopped costing anything.
+ */
+export const CHAIN_HEAL_AT = 16;
+/**
+ * Seconds without a break before the chain lapses.
+ *
+ * Note that braking no longer forfeits the chain outright. It used to, back when
+ * the brake was purely a safety button that needed a cost attached. Venting is
+ * now the brake's real job, and it already costs you heat — which is both your
+ * melting power and your multiplier. Charging the chain on top of that made
+ * venting strictly dominated, and a bot that never vented outscored one that did
+ * by eight to one.
  */
 export const CHAIN_TIMEOUT = 0.7;
-/**
- * Braking drops the chain. Without this the safe play (brake, weave, never risk
- * an impact) also keeps the combo, and there is no decision left in the game.
- * The grace window stops a reflexive tap from erasing a long run.
- */
-export const BRAKE_CHAIN_GRACE = 0.16;
-/**
- * Multiplier ceiling, so a long run can't run the score away from a sharp one.
- * Measured chains were reaching 65-80, so a cap of 25 was being pinned within
- * seconds and the multiplier stopped being a thing you played for.
- */
-export const CHAIN_MULT_CAP = 15;
-/** Threading a near-miss rewards a small speed kick, px/s. */
-export const GRAZE_SPEED_BONUS = 26;
+/** Multiplier ceiling, so a long run can't run away from a sharp one. */
+export const CHAIN_MULT_CAP = 6;
 
-export const SCORE_PER_BREAK = 10;
-export const SCORE_PER_GRAZE = 15;
-
-// ---------------------------------------------------------------- overdrive
-/**
- * The payoff the game was missing. Breaks and grazes charge a meter; when it
- * fills you get a short window where hardness stops mattering entirely and you
- * plough the shaft. Previously the reward for a long chain was a bigger number
- * and nothing else — no moment, no release, nothing to chase.
- *
- * It is deliberately generous to trigger and short to hold: the loop is
- * charge -> unleash -> lose it -> chase it again, several times a run.
- */
-export const OD_CHARGE_PER_BREAK = 0.075;
-export const OD_CHARGE_PER_GRAZE = 0.04;
-/** Overdrive charge is spent, not decayed — but a lapsed chain bleeds it. */
-export const OD_BLEED_ON_CHAIN_LOSS = 0.25;
-/**
- * Charge does not accrue while overdrive is running, so its duration eats into
- * the next fill. At 4.6s over a ~17s run that left room for exactly one trigger
- * per run; 4.0s plus a faster fill lands on two, which is what makes it read as
- * a rhythm rather than a one-off.
- */
-export const OD_TIME = 4;
-/** Score multiplier while overdriven, on top of the chain multiplier. */
-export const OD_SCORE_MULT = 2;
-/** Extra downward pull during overdrive, px/s^2 — you accelerate through it. */
-export const OD_GRAVITY_BONUS = 520;
+export const SCORE_PER_BREAK = 14;

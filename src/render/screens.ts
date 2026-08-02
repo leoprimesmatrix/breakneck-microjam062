@@ -1,19 +1,26 @@
-import { VIEW_H, VIEW_W, ZONE_DEPTH } from '../config';
+import {
+  CORE,
+  GLASS,
+  GRATE,
+  HEAT_REDLINE,
+  MELT_AT,
+  PLATE,
+  ZONE_DEPTH,
+  type Material,
+} from '../config';
 import { clamp, lerp } from '../engine/math';
-import { brighten, darken, type Palette, rgba } from '../game/biomes';
+import { brighten, darken, MOLTEN, mixRGB, type Palette, rgba } from '../game/biomes';
 import type { Game } from '../game/game';
+import { view } from '../viewport';
 import { body, drawTracked, fitSize, heavy, mono, trackedWidth } from './type';
 
 /**
  * Front-of-house: the title lockup and the results screen.
  *
- * These two screens do most of the work of deciding whether a jam judge plays a
- * second run, so they get the same effort as the gameplay. The title has to
- * explain the entire mechanic without a paragraph of text, and the results
- * screen has to make the player want the number to be bigger.
+ * These decide whether a jam judge plays a second run, so they get the same
+ * effort as the gameplay. The title has to teach the entire mechanic without a
+ * paragraph, and the results screen has to make the number feel worth beating.
  */
-
-const OD_GOLD = [255, 214, 96] as const;
 
 function roundRect(
   ctx: CanvasRenderingContext2D,
@@ -33,38 +40,39 @@ function roundRect(
   ctx.closePath();
 }
 
+/** Screen furniture is centred on a fixed column so it reads at any aspect. */
+const panelW = () => Math.min(view.logicalW - 60, 560);
+
 // ------------------------------------------------------------------ title
 export function drawTitle(ctx: CanvasRenderingContext2D, game: Game, pal: Palette) {
-  const t = game.od.pulse; // free-running clock, safe on every screen
+  const W = view.logicalW;
+  const H = view.logicalH;
+  const t = game.clock;
 
-  // Scrim. This has to be genuinely heavy: the attract shaft is streaming blocks
-  // at full contrast behind the lockup, and at anything under ~0.9 the numbers
-  // punch through the copy and the whole screen reads as noise. It stays a
-  // gradient rather than a flat fill so the shaft is still legibly *there*.
-  const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+  // Heavy scrim. The attract shaft streams barriers at full contrast behind the
+  // lockup; under ~0.9 they punch through the copy and the screen reads as noise.
+  const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, rgba(darken(pal.bg, 0.3), 0.97));
-  g.addColorStop(0.3, rgba(pal.bg, 0.88));
-  g.addColorStop(0.75, rgba(pal.bg, 0.93));
+  g.addColorStop(0.3, rgba(pal.bg, 0.9));
+  g.addColorStop(0.75, rgba(pal.bg, 0.94));
   g.addColorStop(1, rgba(darken(pal.bg, 0.35), 0.98));
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillRect(0, 0, W, H);
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
   drawEyebrow(ctx, pal);
   drawWordmark(ctx, pal, t);
-  drawRuleDiagram(ctx, pal, t);
+  drawHeatDiagram(ctx, pal, t);
 
-  // The goal, on the front door. The diagram teaches the rule; this one line
-  // says what the rule is *for*.
   ctx.font = mono(9);
   ctx.fillStyle = rgba(pal.fg, 0.55);
   drawTracked(
     ctx,
     `GO DEEP — A NEW ZONE EVERY ${ZONE_DEPTH}M · DIE, GET RANKED, RUN AGAIN`,
-    VIEW_W * 0.5,
-    VIEW_H * 0.375 + 202,
+    W * 0.5,
+    H * 0.375 + 214,
     1.8,
   );
 
@@ -73,36 +81,27 @@ export function drawTitle(ctx: CanvasRenderingContext2D, game: Game, pal: Palett
 }
 
 function drawEyebrow(ctx: CanvasRenderingContext2D, pal: Palette) {
-  const y = VIEW_H * 0.115;
+  const W = view.logicalW;
+  const y = view.logicalH * 0.115;
   ctx.font = mono(10);
   ctx.fillStyle = rgba(pal.glow, 0.75);
-  drawTracked(ctx, 'MICRO JAM 062', VIEW_W * 0.5, y, 5);
+  drawTracked(ctx, 'MICRO JAM 062', W * 0.5, y, 5);
 
   const w = trackedWidth(ctx, 'MICRO JAM 062', 5);
   ctx.fillStyle = rgba(pal.glow, 0.35);
-  ctx.fillRect(VIEW_W * 0.5 - w * 0.5 - 34, y - 1, 24, 1.5);
-  ctx.fillRect(VIEW_W * 0.5 + w * 0.5 + 10, y - 1, 24, 1.5);
+  ctx.fillRect(W * 0.5 - w * 0.5 - 34, y - 1, 24, 1.5);
+  ctx.fillRect(W * 0.5 + w * 0.5 + 10, y - 1, 24, 1.5);
 }
 
-/**
- * The wordmark.
- *
- * Previously this was a condensed face scaled to fit, which squeezed the glyphs
- * horizontally — the single most visible "unfinished" signal on the whole
- * screen. Now the size is chosen so the natural letterforms fit, and the drama
- * comes from a chromatic split, an emissive gradient and a speed slash rather
- * than from distortion.
- */
 function drawWordmark(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
-  const cx = VIEW_W * 0.5;
-  const y = VIEW_H * 0.235;
+  const cx = view.logicalW * 0.5;
+  const y = view.logicalH * 0.235;
   const track = 2;
-  const size = fitSize(ctx, 'BREAKNECK', VIEW_W - 56, 62, track);
+  const size = fitSize(ctx, 'BREAKNECK', panelW(), 62, track);
   const w = trackedWidth(ctx, 'BREAKNECK', track * (size / 62));
   const tr = track * (size / 62);
 
-  // Speed slash: a bar sweeping behind the type, keyed to the same clock as the
-  // shimmer so the lockup reads as one moving object.
+  // Speed slash sweeping behind the type, on the same clock as the shimmer.
   const sweep = (t * 0.45) % 2.6;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -114,8 +113,8 @@ function drawWordmark(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
   ctx.fillRect(cx - w * 0.6, y - size * 0.1, w * 1.2, size * 0.2);
   ctx.restore();
 
-  // Chromatic split. Two offset ghosts under the solid face; the offset breathes
-  // so the mark never sits perfectly still.
+  // Chromatic split under the solid face; the offset breathes so the mark never
+  // sits perfectly still.
   const split = 2.4 + Math.sin(t * 1.7) * 1.2;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -126,7 +125,6 @@ function drawWordmark(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
   drawTracked(ctx, 'BREAKNECK', cx + split, y, tr);
   ctx.restore();
 
-  // Solid face with a vertical gradient — metal catching light from above.
   const fg = ctx.createLinearGradient(0, y - size * 0.55, 0, y + size * 0.55);
   fg.addColorStop(0, rgba(brighten(pal.fg, 0.5), 1));
   fg.addColorStop(0.52, rgba(pal.fg, 1));
@@ -136,7 +134,6 @@ function drawWordmark(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
   ctx.fillStyle = fg;
   drawTracked(ctx, 'BREAKNECK', cx, y, tr);
 
-  // Underline rule with end caps.
   const uy = y + size * 0.62;
   ctx.fillStyle = rgba(pal.glow, 0.8);
   ctx.fillRect(cx - w * 0.5, uy, w, 2);
@@ -150,133 +147,195 @@ function drawWordmark(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
 }
 
 /**
- * The rule, drawn instead of written.
+ * The rule, demonstrated rather than described.
  *
- * The old title spent five lines of prose explaining the mechanic and judges
- * still had to infer it in play. Two example blocks with a speed readout beside
- * them teaches it in about a second: this number beats that number, so it
- * breaks; that one doesn't, so it doesn't.
+ * A live heat bar sweeps up and down; the four material samples beside it light
+ * up and go molten exactly as the bar passes their threshold, then go cold again
+ * on the way back down. In about two seconds a player watching the title screen
+ * has learned the entire game without reading a sentence — which is the whole
+ * reason the hardness digits were removed.
  */
-function drawRuleDiagram(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
-  const cx = VIEW_W * 0.5;
-  const top = VIEW_H * 0.375;
-  const h = 186;
-  const w = VIEW_W - 76;
+function drawHeatDiagram(ctx: CanvasRenderingContext2D, pal: Palette, t: number) {
+  const cx = view.logicalW * 0.5;
+  const top = view.logicalH * 0.375;
+  const w = panelW();
+  const h = 198;
 
-  // A framed panel. Without it the diagram floats on top of the attract shaft
-  // and the two read as one confused layer; with it, this is obviously an inset
-  // explaining something.
   roundRect(ctx, cx - w * 0.5, top, w, h, 4);
-  ctx.fillStyle = rgba(darken(pal.bg, 0.45), 0.85);
+  ctx.fillStyle = rgba(darken(pal.bg, 0.45), 0.88);
   ctx.fill();
   ctx.strokeStyle = rgba(pal.glow, 0.28);
   ctx.lineWidth = 1;
   ctx.stroke();
 
   ctx.font = mono(10);
-  ctx.fillStyle = rgba(pal.glow, 0.8);
-  drawTracked(ctx, 'YOUR SPEED IS YOUR DAMAGE', cx, top + 20, 3.4);
+  ctx.fillStyle = rgba(pal.glow, 0.85);
+  drawTracked(ctx, 'HEAT IS YOUR WEAPON', cx, top + 20, 3.4);
 
-  // Live readout that counts, so the relationship is animated rather than
-  // static: the same number that decides collisions is the one on the HUD.
-  const kmh = Math.round(300 + Math.sin(t * 0.9) * 180);
-  const tier = clamp(Math.floor(kmh / 60), 1, 9);
-  const numY = top + 50;
+  // Live heat sweep, easing at the ends so each state is held long enough to read.
+  const raw = (Math.sin(t * 0.55) + 1) * 0.5;
+  const heat = clamp(raw * 1.18 - 0.05, 0, 1);
+  const melting = heat > 0.985;
 
-  // Number and unit laid out as one centred group — the unit was previously
-  // pinned at a fixed offset and collided with any three-digit speed.
-  ctx.font = heavy(40);
-  const numW = ctx.measureText(String(kmh)).width;
-  ctx.font = mono(10);
-  const labW = trackedWidth(ctx, 'KM/H', 2);
-  const startX = cx - (numW + 8 + labW) * 0.5;
+  // --- the bar
+  const bw = w - 96;
+  const bx = cx - bw * 0.5;
+  const by = top + 44;
+  const bh = 16;
 
-  ctx.textAlign = 'left';
-  ctx.font = heavy(40);
-  ctx.fillStyle = rgba(brighten(pal.fg, 0.35), 1);
-  ctx.fillText(String(kmh), startX, numY);
-  ctx.font = mono(10);
-  ctx.fillStyle = rgba(pal.fg, 0.5);
-  drawTracked(ctx, 'KM/H', startX + numW + 8, numY + 8, 2, 'left');
-  ctx.textAlign = 'center';
+  ctx.fillStyle = rgba(darken(pal.bg, 0.5), 0.9);
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = rgba(pal.fg, 0.18);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
 
-  // The conversion, spelled out. km/h alone leaves the mapping to block
-  // numbers as homework; "= POWER 7" is the whole bridge in one line.
-  ctx.font = mono(11);
-  ctx.fillStyle = rgba(pal.glow, 0.95);
-  drawTracked(ctx, `=  POWER ${tier}`, cx, numY + 22, 3);
+  ctx.fillStyle = rgba(pal.hot, 0.16);
+  ctx.fillRect(bx + HEAT_REDLINE * bw, by, bw * (1 - HEAT_REDLINE), bh);
+  ctx.fillStyle = rgba(pal.hot, 0.9);
+  ctx.fillRect(bx + HEAT_REDLINE * bw - 1, by - 3, 2, bh + 6);
 
-  // Two sample blocks: one under the live tier, one over it.
-  const bw = 58;
-  const bh = 46;
-  const gap = 74;
-  const by = top + 92;
-  sample(ctx, cx - gap - bw * 0.5, by, bw, bh, Math.max(1, tier - 2), true, pal);
-  sample(ctx, cx + gap - bw * 0.5, by, bw, bh, Math.min(9, tier + 3), false, pal);
-
-  // The comparison, spelled out between them.
-  ctx.font = mono(13);
-  ctx.fillStyle = rgba(pal.fg, 0.35);
-  ctx.fillText('vs', cx, by + bh * 0.5);
+  const col = tempColour(heat, melting);
+  const g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+  g.addColorStop(0, rgba(darken(col, 0.35), 1));
+  g.addColorStop(1, rgba(brighten(col, 0.25), 1));
+  ctx.fillStyle = g;
+  ctx.fillRect(bx + 1, by + 1, Math.max(0, heat * bw - 2), bh - 2);
 
   ctx.font = mono(9);
-  ctx.fillStyle = rgba(pal.fg, 0.9);
-  drawTracked(ctx, 'SMASH', cx - gap, by + bh + 18, 2.5);
-  ctx.fillStyle = rgba(pal.hot, 1);
-  drawTracked(ctx, 'WRECKED', cx + gap, by + bh + 18, 2.5);
+  ctx.fillStyle = rgba(heat >= HEAT_REDLINE ? pal.hot : pal.fg, 0.6);
+  drawTracked(
+    ctx,
+    melting ? 'MELTDOWN' : heat >= HEAT_REDLINE ? 'REDLINE — HULL BURNS' : 'HEAT',
+    cx,
+    by + bh + 12,
+    2.5,
+  );
+
+  // --- four samples, lighting up as the bar passes each threshold
+  const mats: Material[] = [GLASS, GRATE, PLATE, CORE];
+  const sw = 62;
+  const sh = 46;
+  const gap = (bw - sw * 4) / 3;
+  const sy = top + 106;
+
+  for (let i = 0; i < 4; i++) {
+    const m = mats[i];
+    const on = melting || heat >= MELT_AT[m];
+    const x = bx + i * (sw + gap);
+    sample(ctx, x, sy, sw, sh, m, on, pal);
+
+    ctx.font = mono(8);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = rgba(on ? brighten(pal.fg, 0.2) : pal.hot, on ? 0.95 : 0.7);
+    drawTracked(ctx, on ? 'MELTS' : 'WRECKS YOU', x + sw * 0.5, sy + sh + 14, 1.6);
+    ctx.fillStyle = rgba(pal.fg, 0.35);
+    drawTracked(
+      ctx,
+      ['GLASS', 'GRATE', 'PLATE', 'CORE'][i],
+      x + sw * 0.5,
+      sy + sh + 26,
+      1.6,
+    );
+  }
 }
 
+function tempColour(heat: number, melting: boolean) {
+  if (melting) return MOLTEN;
+  return heat < 0.33
+    ? mixRGB([120, 132, 156], [255, 120, 40], heat / 0.33)
+    : mixRGB([255, 120, 40], [255, 250, 232], (heat - 0.33) / 0.67);
+}
+
+/** A single barrier, drawn in the same language as the real ones. */
 function sample(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   w: number,
   h: number,
-  n: number,
-  breakable: boolean,
+  m: Material,
+  on: boolean,
   pal: Palette,
 ) {
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  if (breakable) {
-    const g = ctx.createLinearGradient(0, y, 0, y + h);
-    g.addColorStop(0, rgba(brighten(pal.fg, 0.3), 1));
-    g.addColorStop(1, rgba(darken(pal.fg, 0.3), 1));
+  const inset = m === GLASS ? h * 0.22 : m === GRATE ? h * 0.1 : 0;
+  const yy = y + inset;
+  const hh = h - inset * 2;
+  const molten = on ? mixRGB(pal.fg, MOLTEN, 0.4) : pal.hot;
+
+  ctx.save();
+  if (on) {
+    const g = ctx.createLinearGradient(0, yy, 0, yy + hh);
+    g.addColorStop(0, rgba(brighten(molten, 0.3), m === GLASS ? 0.55 : 1));
+    g.addColorStop(1, rgba(darken(molten, 0.3), m === GLASS ? 0.5 : 1));
     ctx.fillStyle = g;
-    ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = rgba(darken(pal.bg, 0.2), 1);
+    ctx.fillRect(x, yy, w, hh);
   } else {
     ctx.fillStyle = rgba(darken(pal.bg, 0.3), 0.9);
-    ctx.fillRect(x, y, w, h);
+    ctx.fillRect(x, yy, w, hh);
     ctx.save();
     ctx.beginPath();
-    ctx.rect(x, y, w, h);
+    ctx.rect(x, yy, w, hh);
     ctx.clip();
     ctx.strokeStyle = rgba(pal.hot, 0.25);
     ctx.lineWidth = 3;
     ctx.beginPath();
-    for (let i = -h; i < w + h; i += 11) {
-      ctx.moveTo(x + i, y);
-      ctx.lineTo(x + i + h, y + h);
+    for (let i = -hh; i < w + hh; i += 11) {
+      ctx.moveTo(x + i, yy);
+      ctx.lineTo(x + i + hh, yy + hh);
     }
     ctx.stroke();
     ctx.restore();
     ctx.strokeStyle = rgba(pal.hot, 1);
     ctx.lineWidth = 2;
-    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
-    ctx.fillStyle = rgba(brighten(pal.hot, 0.4), 1);
+    ctx.strokeRect(x + 1, yy + 1, w - 2, hh - 2);
   }
-  ctx.font = heavy(26);
-  ctx.fillText(String(n), x + w * 0.5, y + h * 0.5 + 1);
+
+  const ink = on ? rgba(darken(pal.bg, 0.35), 0.75) : rgba(pal.hot, 0.7);
+  if (m === GRATE) {
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 1; i < 5; i++) {
+      ctx.moveTo(x + (i / 5) * w, yy + 2);
+      ctx.lineTo(x + (i / 5) * w, yy + hh - 2);
+    }
+    ctx.moveTo(x + 2, yy + hh * 0.5);
+    ctx.lineTo(x + w - 2, yy + hh * 0.5);
+    ctx.stroke();
+  } else if (m === PLATE) {
+    ctx.fillStyle = ink;
+    for (const [dx, dy] of [
+      [7, 7],
+      [w - 7, 7],
+      [7, hh - 7],
+      [w - 7, hh - 7],
+    ] as const) {
+      ctx.beginPath();
+      ctx.arc(x + dx, yy + dy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (m === CORE) {
+    for (let i = 1; i < 3; i++) {
+      ctx.fillStyle = on ? rgba(brighten(molten, 0.7), 0.9) : rgba(pal.hot, 0.55);
+      ctx.fillRect(x + 2, yy + (i / 3) * hh - 1, w - 4, 2);
+    }
+    ctx.strokeStyle = on ? rgba(brighten(molten, 0.5), 0.9) : rgba(pal.hot, 1);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 3, yy + 3, w - 6, hh - 6);
+  } else {
+    ctx.strokeStyle = on ? rgba(brighten(molten, 0.8), 0.5) : rgba(pal.hot, 0.45);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + w * 0.2, yy);
+    ctx.lineTo(x + w * 0.38, yy + hh);
+    ctx.moveTo(x + w * 0.72, yy);
+    ctx.lineTo(x + w * 0.6, yy + hh);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
-function keycap(
-  ctx: CanvasRenderingContext2D,
-  label: string,
-  x: number,
-  y: number,
-  pal: Palette,
-) {
+function keycap(ctx: CanvasRenderingContext2D, label: string, x: number, y: number, pal: Palette) {
   const w = Math.max(26, ctx.measureText(label).width + 16);
   const h = 26;
   roundRect(ctx, x - w * 0.5, y - h * 0.5, w, h, 5);
@@ -292,33 +351,32 @@ function keycap(
 }
 
 function drawControls(ctx: CanvasRenderingContext2D, pal: Palette) {
-  const y = VIEW_H * 0.685;
+  const W = view.logicalW;
+  const y = view.logicalH * 0.7;
   const rows: [string, string][] = [
-    ['W', 'TUCK — dive faster'],
+    ['W', 'DIVE — build heat'],
     ['A D', 'STEER — harder the faster you go'],
-    ['S', 'BRAKE — buy back control'],
+    ['S', 'VENT — dump heat before it burns you'],
   ];
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
   rows.forEach(([keys, desc], i) => {
-    const ry = y + i * 34;
+    const ry = y + i * 32;
     const parts = keys.split(' ');
-    // Lay the caps and the description out as one centred unit.
     ctx.font = heavy(13);
     let capsW = 0;
     for (const p of parts) capsW += Math.max(26, ctx.measureText(p).width + 16) + 6;
     capsW -= 6;
     ctx.font = body(13);
     const descW = ctx.measureText(desc).width;
-    const total = capsW + 14 + descW;
-    let x = VIEW_W * 0.5 - total * 0.5;
+    let x = W * 0.5 - (capsW + 14 + descW) * 0.5;
 
     for (const p of parts) {
       ctx.font = heavy(13);
-      const w = keycap(ctx, p, x + Math.max(26, ctx.measureText(p).width + 16) * 0.5, ry, pal);
-      x += w + 6;
+      const cw = keycap(ctx, p, x + Math.max(26, ctx.measureText(p).width + 16) * 0.5, ry, pal);
+      x += cw + 6;
     }
     x += 8;
     ctx.font = body(13);
@@ -330,50 +388,51 @@ function drawControls(ctx: CanvasRenderingContext2D, pal: Palette) {
 
   ctx.font = mono(9);
   ctx.fillStyle = rgba(pal.fg, 0.32);
-  drawTracked(ctx, 'TOUCH: SIDES STEER · MIDDLE TUCKS · BOTTOM BRAKES', VIEW_W * 0.5, y + 100, 1.6);
+  drawTracked(ctx, 'TOUCH: SIDES STEER · MIDDLE DIVES · BOTTOM VENTS', W * 0.5, y + 96, 1.6);
 }
 
 function drawPrompt(ctx: CanvasRenderingContext2D, game: Game, pal: Palette, t: number) {
-  const y = VIEW_H * 0.875;
+  const W = view.logicalW;
+  const y = view.logicalH * 0.88;
   const a = 0.55 + Math.sin(t * 4.2) * 0.45;
 
   ctx.save();
   ctx.globalAlpha = a;
   ctx.font = heavy(19);
   ctx.fillStyle = rgba(brighten(pal.fg, 0.3), 1);
-  drawTracked(ctx, 'PRESS ANY KEY', VIEW_W * 0.5, y, 4);
+  drawTracked(ctx, 'PRESS ANY KEY', W * 0.5, y, 4);
   ctx.restore();
 
   if (game.best > 0) {
     ctx.font = mono(11);
-    ctx.fillStyle = rgba(OD_GOLD, 0.85);
-    drawTracked(ctx, `BEST  ${game.best}`, VIEW_W * 0.5, y + 30, 3);
+    ctx.fillStyle = rgba(MOLTEN, 0.85);
+    drawTracked(ctx, `BEST  ${game.best}`, W * 0.5, y + 28, 3);
   }
 }
 
 // ---------------------------------------------------------------- results
 export function drawDead(ctx: CanvasRenderingContext2D, game: Game, pal: Palette) {
-  // Reveal staggers over the first second so the screen assembles rather than
-  // appearing — the difference between a game-over and a results *sequence*.
+  const W = view.logicalW;
+  const H = view.logicalH;
+  // Reveal staggers so the screen assembles rather than appearing — the
+  // difference between a game-over and a results sequence.
   const t = game.runTime;
   const step = (d: number) => clamp((t - d) / 0.22, 0, 1);
 
-  const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-  g.addColorStop(0, rgba(darken(pal.bg, 0.35), 0.95));
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, rgba(darken(pal.bg, 0.35), 0.96));
   g.addColorStop(1, rgba(darken(pal.bg, 0.15), 0.97));
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillRect(0, 0, W, H);
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // --- WRECKED
   ctx.save();
   ctx.globalAlpha = step(0);
-  const wy = VIEW_H * 0.155;
-  ctx.font = heavy(fitSize(ctx, 'WRECKED', VIEW_W - 90, 50, 6));
+  ctx.font = heavy(fitSize(ctx, 'WRECKED', panelW() - 40, 50, 6));
   ctx.fillStyle = rgba(pal.hot, 1);
-  drawTracked(ctx, 'WRECKED', VIEW_W * 0.5, wy, 6);
+  drawTracked(ctx, 'WRECKED', W * 0.5, H * 0.155, 6);
   ctx.restore();
 
   // --- rank badge
@@ -381,61 +440,60 @@ export function drawDead(ctx: CanvasRenderingContext2D, game: Game, pal: Palette
   if (ra > 0) {
     ctx.save();
     ctx.globalAlpha = ra;
-    const cy = VIEW_H * 0.315;
-    const r = lerp(78, 54, ra); // settles inward as it fades up
-    ctx.strokeStyle = rgba(OD_GOLD, 0.9);
+    const cy = H * 0.315;
+    const r = lerp(78, 54, ra);
+    ctx.strokeStyle = rgba(MOLTEN, 0.9);
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 - Math.PI * 0.5;
-      const px = VIEW_W * 0.5 + Math.cos(a) * r;
+      const px = W * 0.5 + Math.cos(a) * r;
       const py = cy + Math.sin(a) * r;
       i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
     }
     ctx.closePath();
     ctx.stroke();
-    ctx.fillStyle = rgba(OD_GOLD, 0.07);
+    ctx.fillStyle = rgba(MOLTEN, 0.07);
     ctx.fill();
 
     ctx.font = heavy(56);
-    ctx.fillStyle = rgba(OD_GOLD, 1);
-    ctx.fillText(game.rank, VIEW_W * 0.5, cy + 3);
+    ctx.fillStyle = rgba(MOLTEN, 1);
+    ctx.fillText(game.rank, W * 0.5, cy + 3);
     ctx.font = mono(9);
     ctx.fillStyle = rgba(pal.fg, 0.5);
-    drawTracked(ctx, 'RANK', VIEW_W * 0.5, cy + 72, 3);
+    drawTracked(ctx, 'RANK', W * 0.5, cy + 72, 3);
     ctx.restore();
   }
 
-  // --- score
   ctx.save();
   ctx.globalAlpha = step(0.34);
-  const sy = VIEW_H * 0.47;
+  const sy = H * 0.47;
   ctx.font = heavy(58);
   ctx.fillStyle = rgba(brighten(pal.fg, 0.25), 1);
-  drawTracked(ctx, String(game.score), VIEW_W * 0.5, sy, 1);
+  drawTracked(ctx, String(game.score), W * 0.5, sy, 1);
   ctx.font = mono(9);
   ctx.fillStyle = rgba(pal.fg, 0.45);
-  drawTracked(ctx, 'SCORE', VIEW_W * 0.5, sy + 26, 4);
+  drawTracked(ctx, 'SCORE', W * 0.5, sy + 26, 4);
   ctx.restore();
 
-  // --- stat grid
+  // --- stat grid, now reporting on the heat you actually rode
   ctx.save();
   ctx.globalAlpha = step(0.5);
   const stats: [string, string][] = [
     ['DEPTH', `${Math.floor(game.depth)}m`],
     ['ZONE', game.zoneCardName],
+    ['PEAK HEAT', `${Math.round(game.peakHeat * 100)}%`],
+    ['TIME IN REDLINE', `${game.redlineTime.toFixed(1)}s`],
     ['BEST CHAIN', `×${game.bestChain}`],
-    ['TOP SPEED', `${Math.round(game.topKmh)}`],
-    ['BROKEN', String(game.breaks)],
-    ['OVERDRIVES', String(game.odTriggers)],
+    ['MELTDOWNS', String(game.meltdowns)],
   ];
-  const gy = VIEW_H * 0.585;
-  const colW = (VIEW_W - 80) / 2;
+  const gy = H * 0.585;
+  const pw = panelW();
+  const left = W * 0.5 - pw * 0.5;
+  const colW = pw / 2;
   stats.forEach(([k, v], i) => {
-    const col = i % 2;
-    const row = (i / 2) | 0;
-    const x = 40 + col * colW;
-    const y = gy + row * 36;
+    const x = left + (i % 2) * colW;
+    const y = gy + ((i / 2) | 0) * 36;
     ctx.textAlign = 'left';
     ctx.font = mono(9);
     ctx.fillStyle = rgba(pal.fg, 0.4);
@@ -447,23 +505,21 @@ export function drawDead(ctx: CanvasRenderingContext2D, game: Game, pal: Palette
   ctx.textAlign = 'center';
   ctx.restore();
 
-  // --- best / new best
   ctx.save();
   ctx.globalAlpha = step(0.66);
-  const by = VIEW_H * 0.765;
+  const by = H * 0.765;
   if (game.isNewBest) {
-    const pulse = 0.7 + Math.sin(game.od.pulse * 7) * 0.3;
+    const pulse = 0.7 + Math.sin(game.clock * 7) * 0.3;
     ctx.font = heavy(22);
-    ctx.fillStyle = rgba(OD_GOLD, pulse);
-    drawTracked(ctx, 'NEW BEST', VIEW_W * 0.5, by, 5);
+    ctx.fillStyle = rgba(MOLTEN, pulse);
+    drawTracked(ctx, 'NEW BEST', W * 0.5, by, 5);
   } else {
     ctx.font = mono(11);
     ctx.fillStyle = rgba(pal.fg, 0.5);
-    drawTracked(ctx, `BEST  ${game.best}`, VIEW_W * 0.5, by, 3);
+    drawTracked(ctx, `BEST  ${game.best}`, W * 0.5, by, 3);
   }
   ctx.restore();
 
-  // --- next target: hand the next run its goal before the restart prompt.
   ctx.save();
   ctx.globalAlpha = step(0.74);
   ctx.font = mono(10);
@@ -471,20 +527,19 @@ export function drawDead(ctx: CanvasRenderingContext2D, game: Game, pal: Palette
   drawTracked(
     ctx,
     `NEXT TARGET — ZONE ${game.zone + 2} AT ${(game.zone + 1) * ZONE_DEPTH}m`,
-    VIEW_W * 0.5,
-    VIEW_H * 0.815,
+    W * 0.5,
+    H * 0.815,
     2.5,
   );
   ctx.restore();
 
-  // --- restart
   const pa = step(0.82);
-  if (pa > 0 && Math.floor(game.od.pulse * 2.2) % 2 === 0) {
+  if (pa > 0 && Math.floor(game.clock * 2.2) % 2 === 0) {
     ctx.save();
     ctx.globalAlpha = pa;
     ctx.font = heavy(18);
     ctx.fillStyle = rgba(brighten(pal.fg, 0.3), 1);
-    drawTracked(ctx, 'SPACE — RUN IT AGAIN', VIEW_W * 0.5, VIEW_H * 0.875, 3);
+    drawTracked(ctx, 'SPACE — RUN IT AGAIN', W * 0.5, H * 0.88, 3);
     ctx.restore();
   }
 }

@@ -1,6 +1,9 @@
 import { ZONE_DEPTH } from '../config';
 import { clamp, lerp } from '../engine/math';
 
+/** Shared molten accent. Was previously redeclared in five files, two variants. */
+export const MOLTEN: RGB = [255, 214, 96];
+
 /**
  * The shaft has chapters.
  *
@@ -103,8 +106,13 @@ export function zoneName(zoneIndex: number) {
   return b.name + (LAP[lap] ?? ` x${lap + 1}`);
 }
 
-export function zoneNumber(zoneIndex: number) {
-  return zoneIndex + 1;
+/**
+ * The card's sub-line. This used to be duplicated into a parallel array in
+ * `game.ts` to dodge a circular import — the import was never actually circular,
+ * so the copy just drifted from the table it was copied from.
+ */
+export function zoneSub(zoneIndex: number) {
+  return biomeAt(zoneIndex).sub.toUpperCase();
 }
 
 const mixRGB = (a: RGB, b: RGB, t: number): RGB => [
@@ -153,9 +161,6 @@ export function paletteAt(metres: number): Palette {
 }
 
 // ------------------------------------------------------------------ css helpers
-export const rgb = (c: RGB) =>
-  `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
-
 export const rgba = (c: RGB, a: number) =>
   `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a.toFixed(3)})`;
 

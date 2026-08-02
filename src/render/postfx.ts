@@ -1,6 +1,5 @@
-import { VIEW_H, VIEW_W } from '../config';
 import { clamp } from '../engine/math';
-import type { RGB } from '../game/biomes';
+import { view } from '../viewport';
 
 /**
  * Screen-space post: bloom, chromatic aberration, grain, scanlines.
@@ -8,6 +7,9 @@ import type { RGB } from '../game/biomes';
  * The game is drawn once into an offscreen scene buffer instead of straight to
  * the canvas, which is what makes any of this possible — you cannot bloom or
  * split channels on pixels you have already handed to the compositor.
+ *
+ * The buffer's aspect now follows the window rather than a fixed 540x760 shaft,
+ * so it is reallocated whenever the viewport changes shape.
  *
  * Everything here degrades rather than fails. Canvas `filter` is the only exotic
  * feature used, and there is a manual fallback for it, so nothing in this file
@@ -39,17 +41,15 @@ function detectFilterSupport(): boolean {
 }
 
 export interface CompositeOpts {
-  /** Where the shaft lives in canvas CSS pixels. */
-  ox: number;
-  oy: number;
-  ow: number;
-  oh: number;
+  /** Canvas size in CSS pixels — the scene fills all of it. */
+  w: number;
+  h: number;
   /** 0..1 — drives aberration width and bloom lift. */
   speed: number;
-  /** 0..1 overdrive intensity; blows the bloom out and warms it. */
-  overdrive: number;
-  /** Zone accent, tints the bloom so each biome glows its own colour. */
-  glow: RGB;
+  /** 0..1 meltdown intensity; blows the bloom out and warms it. */
+  melt: number;
+  /** 0..1 how deep into the redline; skews the fringe hot. */
+  burn: number;
 }
 
 export class PostFX {
@@ -63,18 +63,18 @@ export class PostFX {
   private grain: HTMLCanvasElement;
 
   private readonly canFilter = detectFilterSupport();
-  private quality = 0;
+  private lastW = 0;
+  private lastH = 0;
   private grainPhase = 0;
 
   constructor() {
-    this.scene = makeCanvas(VIEW_W, VIEW_H);
+    this.scene = makeCanvas(2, 2);
     this.sceneCtx = this.scene.getContext('2d', { alpha: false })!;
-    this.bloom = makeCanvas(VIEW_W / BLOOM_DIV, VIEW_H / BLOOM_DIV);
+    this.bloom = makeCanvas(2, 2);
     this.bloomCtx = this.bloom.getContext('2d')!;
-    this.tint = makeCanvas(VIEW_W / TINT_DIV, VIEW_H / TINT_DIV);
+    this.tint = makeCanvas(2, 2);
     this.tintCtx = this.tint.getContext('2d')!;
     this.grain = this.buildGrain();
-    this.setQuality(1);
   }
 
   /**
@@ -96,14 +96,18 @@ export class PostFX {
     return c;
   }
 
-  /** `q` is device pixels per logical unit for the shaft. */
-  setQuality(q: number) {
-    const qq = clamp(q, 0.5, 2);
-    if (Math.abs(qq - this.quality) < 0.01) return;
-    this.quality = qq;
+  /**
+   * Size the buffers to the current viewport. Capped so an enormous window on a
+   * retina display does not allocate a scene buffer nobody can afford to blur.
+   */
+  private ensureSize() {
+    const q = clamp(view.scale * view.dpr, 0.5, 2);
+    const w = Math.round(view.logicalW * q);
+    const h = Math.round(view.logicalH * q);
+    if (w === this.lastW && h === this.lastH) return;
+    this.lastW = w;
+    this.lastH = h;
 
-    const w = Math.round(VIEW_W * qq);
-    const h = Math.round(VIEW_H * qq);
     this.scene.width = w;
     this.scene.height = h;
     this.bloom.width = Math.max(1, Math.round(w / BLOOM_DIV));
@@ -112,10 +116,18 @@ export class PostFX {
     this.tint.height = Math.max(1, Math.round(h / TINT_DIV));
   }
 
-  /** Scene context, transformed so callers draw in logical 540x760 units. */
+  /** Scene context, transformed so callers draw in logical units. */
   begin(): CanvasRenderingContext2D {
+    this.ensureSize();
     const c = this.sceneCtx;
-    c.setTransform(this.scene.width / VIEW_W, 0, 0, this.scene.height / VIEW_H, 0, 0);
+    c.setTransform(
+      this.scene.width / view.logicalW,
+      0,
+      0,
+      this.scene.height / view.logicalH,
+      0,
+      0,
+    );
     return c;
   }
 
@@ -125,7 +137,7 @@ export class PostFX {
    * background near black, so an additive composite of the blurred scene is
    * already a threshold — dark pixels contribute nothing, bright ones halo.
    */
-  private buildBloom(overdrive: number) {
+  private buildBloom(melt: number) {
     const b = this.bloomCtx;
     const bw = this.bloom.width;
     const bh = this.bloom.height;
@@ -136,7 +148,7 @@ export class PostFX {
     b.clearRect(0, 0, bw, bh);
 
     if (this.canFilter) {
-      b.filter = `blur(${(2.4 + overdrive * 2).toFixed(2)}px)`;
+      b.filter = `blur(${(2.4 + melt * 2).toFixed(2)}px)`;
       b.drawImage(this.scene, 0, 0, bw, bh);
       b.filter = 'none';
     } else {
@@ -158,7 +170,13 @@ export class PostFX {
    * the result back offset. Two of these in opposite directions is a convincing
    * lens fringe, and it only runs once the fall is fast enough to justify it.
    */
-  private ghost(ctx: CanvasRenderingContext2D, o: CompositeOpts, mult: string, dx: number, a: number) {
+  private ghost(
+    ctx: CanvasRenderingContext2D,
+    o: CompositeOpts,
+    mult: string,
+    dx: number,
+    a: number,
+  ) {
     const t = this.tintCtx;
     const tw = this.tint.width;
     const th = this.tint.height;
@@ -175,47 +193,42 @@ export class PostFX {
 
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = a;
-    ctx.drawImage(this.tint, o.ox + dx, o.oy, o.ow, o.oh);
+    ctx.drawImage(this.tint, dx, 0, o.w, o.h);
   }
 
   // ---------------------------------------------------------------- output
   /** Blit the finished scene into `ctx` (canvas CSS-pixel space) with post. */
   composite(ctx: CanvasRenderingContext2D, o: CompositeOpts) {
-    // Fringe width. Kept modest: this lands on the hardness numbers, and past
-    // about 6px the split stops reading as a lens and starts reading as a
-    // rendering fault.
-    const ab = Math.max(0, o.speed - 0.4) * 7 + o.overdrive * 2.2;
+    // Fringe width. Kept modest: past about 6px the split stops reading as a
+    // lens and starts reading as a rendering fault.
+    const ab = Math.max(0, o.speed - 0.4) * 7 + o.melt * 2.2 + o.burn * 1.6;
 
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
     ctx.globalAlpha = 1;
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(this.scene, o.ox, o.oy, o.ow, o.oh);
+    ctx.drawImage(this.scene, 0, 0, o.w, o.h);
 
     if (ab > 0.35) {
       this.ghost(ctx, o, '#ff0000', -ab, clamp(0.12 + ab * 0.03, 0, 0.4));
       this.ghost(ctx, o, '#00ffff', ab, clamp(0.12 + ab * 0.03, 0, 0.4));
     }
 
-    this.buildBloom(o.overdrive);
+    this.buildBloom(o.melt);
     ctx.globalCompositeOperation = 'lighter';
     // Wide soft halo, then a tighter brighter core — two draws read as a real
-    // bloom curve instead of a flat glow.
-    //
-    // These are kept deliberately low. Additive bloom compounds: at the values
-    // this started with, overdrive summed to ~1.8x the blurred scene on top of
-    // the scene itself and the hardness numbers — the one thing that must stay
-    // readable — disappeared into a gold blowout.
-    ctx.globalAlpha = clamp(0.26 + o.speed * 0.16 + o.overdrive * 0.16, 0, 1);
-    ctx.drawImage(this.bloom, o.ox - 6, o.oy - 6, o.ow + 12, o.oh + 12);
-    ctx.globalAlpha = clamp(0.13 + o.speed * 0.11 + o.overdrive * 0.13, 0, 1);
-    ctx.drawImage(this.bloom, o.ox, o.oy, o.ow, o.oh);
+    // bloom curve instead of a flat glow. Kept low because additive bloom
+    // compounds, and the material silhouettes must stay legible.
+    ctx.globalAlpha = clamp(0.26 + o.speed * 0.16 + o.melt * 0.16, 0, 1);
+    ctx.drawImage(this.bloom, -6, -6, o.w + 12, o.h + 12);
+    ctx.globalAlpha = clamp(0.13 + o.speed * 0.11 + o.melt * 0.13, 0, 1);
+    ctx.drawImage(this.bloom, 0, 0, o.w, o.h);
 
     ctx.restore();
   }
 
   /** Grain + scanlines over the whole canvas, after everything else. */
-  finish(ctx: CanvasRenderingContext2D, w: number, h: number, speed: number, overdrive: number) {
+  finish(ctx: CanvasRenderingContext2D, w: number, h: number, speed: number, melt: number) {
     this.grainPhase = (this.grainPhase + 7) % 128;
 
     ctx.save();
@@ -229,11 +242,11 @@ export class PostFX {
     }
     ctx.restore();
 
-    // Scanlines: 2px pitch, very low contrast. Enough to read as a screen, not
+    // Scanlines: 3px pitch, very low contrast. Enough to read as a screen, not
     // enough to fight the art or alias into moire at odd device ratios.
     ctx.save();
     ctx.globalCompositeOperation = 'multiply';
-    ctx.globalAlpha = 0.16 + overdrive * 0.06;
+    ctx.globalAlpha = 0.16 + melt * 0.06;
     ctx.fillStyle = '#000';
     for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
     ctx.restore();

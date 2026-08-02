@@ -1,77 +1,55 @@
 import type { Game } from '../game/game';
+import { view } from '../viewport';
 import { drawHud } from './hud';
 import { PostFX } from './postfx';
 import { drawScene, effectivePalette } from './scene';
 import { drawDead, drawTitle } from './screens';
-import { drawSurround, measure } from './surround';
 
 /**
  * Frame orchestration.
  *
- * Five passes, in this order, because each one depends on the last:
+ * Four passes, in this order, because each depends on the last:
  *
- *   1. surround   — the exterior, in canvas pixels, filling the whole window
- *   2. scene      — the shaft, into an offscreen buffer at shaft resolution
- *   3. composite  — that buffer blitted back with bloom and chromatic split
- *   4. hud        — drawn straight onto the canvas so it stays sharp
- *   5. finish     — grain and scanlines over everything
+ *   1. scene      — the playfield, into an offscreen buffer at viewport aspect
+ *   2. composite  — that buffer blitted back with bloom and chromatic split
+ *   3. hud        — drawn straight onto the canvas so it stays sharp
+ *   4. finish     — grain and scanlines over everything
  *
- * The scene has to be offscreen for step 3 to exist at all, and the HUD has to
- * be outside it or the bloom would smear the one thing that must stay legible.
+ * There is no longer a surround pass: the playfield fills the window, so the
+ * exterior it used to draw has nowhere to be. Its parallax motifs now live in
+ * the scene's background layers.
  */
 
 const fx = new PostFX();
 
-/** Below this flank width there is no room for exterior telemetry. */
-const COMPACT_FLANK = 132;
-
-export function render(
-  ctx: CanvasRenderingContext2D,
-  game: Game,
-  w: number,
-  h: number,
-  dpr: number,
-) {
-  const v = measure(w, h);
-  const odI = game.od.intensity;
-  const pal = effectivePalette(game.palette, odI);
+export function render(ctx: CanvasRenderingContext2D, game: Game) {
+  const melt = game.heat.meltIntensity;
+  const pal = effectivePalette(game.palette, melt);
   const speed = game.state === 'title' ? 0.42 : game.player.speedNorm;
+  const burn = game.state === 'play' && game.burning ? game.heat.overload : 0;
 
-  // --- 1. exterior, in CSS pixel space
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = 1;
-  drawSurround(ctx, v, game, pal);
-
-  // --- 2. shaft, offscreen
-  fx.setQuality(v.scale * dpr);
+  // --- 1. playfield, offscreen
   drawScene(fx.begin(), game, pal);
 
-  // --- 3. composite with post
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  fx.composite(ctx, {
-    ox: v.ox,
-    oy: v.oy,
-    ow: v.ow,
-    oh: v.oh,
-    speed,
-    overdrive: odI,
-    glow: pal.glow,
-  });
+  // --- 2. composite with post, filling the canvas
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  fx.composite(ctx, { w: view.w, h: view.h, speed, melt, burn });
 
-  // --- 4. hud and overlays, in shaft-local logical units
-  const s = v.scale * dpr;
-  ctx.setTransform(s, 0, 0, s, v.ox * dpr, v.oy * dpr);
+  // --- 3. hud and overlays, in logical units
+  const s = view.scale * view.dpr;
+  ctx.setTransform(s, 0, 0, s, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
 
-  drawHud(ctx, game, pal, v.flank < COMPACT_FLANK);
+  drawHud(ctx, game, pal);
   if (game.state === 'title') drawTitle(ctx, game, pal);
   else if (game.state === 'dead') drawDead(ctx, game, pal);
 
-  // --- 5. film pass over the whole window
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  fx.finish(ctx, w, h, speed, odI);
+  // --- 4. film pass over the whole window
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  fx.finish(ctx, view.w, view.h, speed, melt);
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
 }

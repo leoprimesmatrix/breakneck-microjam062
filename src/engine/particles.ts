@@ -1,8 +1,8 @@
 import type { Palette } from '../game/biomes';
-import { rgba } from '../game/biomes';
+import { MOLTEN, rgba } from '../game/biomes';
 import { randRange } from './math';
 
-export type ParticleTint = 'cool' | 'hot' | 'od';
+export type ParticleTint = 'cool' | 'hot' | 'molten';
 
 interface Particle {
   x: number;
@@ -94,7 +94,7 @@ export class Particles {
     p.size = 12 + power * 26;
     p.rot = 0;
     p.vrot = 0;
-    p.tint = power > 1 ? 'od' : 'cool';
+    p.tint = power > 1 ? 'molten' : 'cool';
     p.shape = 2;
     p.active = true;
   }
@@ -128,7 +128,7 @@ export class Particles {
       if (sy < -120 || sy > 980) continue;
 
       const a = p.life / p.maxLife;
-      const col = p.tint === 'hot' ? pal.hot : p.tint === 'od' ? OD_RGB : pal.fg;
+      const col = p.tint === 'hot' ? pal.hot : p.tint === 'molten' ? MOLTEN : pal.fg;
 
       if (p.shape === 2) {
         const grow = 1 - a;
@@ -162,6 +162,3 @@ export class Particles {
     ctx.globalCompositeOperation = prevOp;
   }
 }
-
-/** Overdrive debris ignores the biome — it is the one colour that never shifts. */
-const OD_RGB = [255, 226, 122] as const;
