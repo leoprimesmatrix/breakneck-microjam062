@@ -131,6 +131,8 @@ export class Game {
   standbyTime = 0;
   /** Swallows the igniting gesture so it cannot also start the run. */
   private armGate = false;
+  /** Same idea as `armGate`, for the results screen. Set in `die`. */
+  private deadGate = false;
 
   score = 0;
   combo = 1;
@@ -369,6 +371,17 @@ export class Game {
   private die() {
     this.state = 'dead';
     this.deadTime = 0;
+    // Every pointer-down and every Space press latches a confirm edge, and
+    // nothing in a run consumes them — so by the time anyone dies, one is
+    // guaranteed to be sitting there. Left alone, `stepDead` reads it the
+    // instant the 0.8 s gate opens and the results screen dismisses *itself*:
+    // score, best, and the retry prompt gone before they can be read. Same
+    // disease as the pause screen's, same cure: drain on entry, then gate on
+    // the hold so a player who died mid-aim must actually let go and press
+    // again before anything restarts.
+    this.input.takeConfirm();
+    this.input.takeRelease();
+    this.deadGate = true;
     this.audio.setRunning(false);
     this.audio.onDeath();
     this.juice.addHitstop(0.24);
@@ -558,7 +571,13 @@ export class Game {
     this.particles.update(dt);
     this.stepPopups(dt);
     this.stepMarks(dt);
-    if (this.deadTime > 0.8 && (this.input.takeConfirm() || this.input.takeRelease())) {
+    if (this.deadGate) {
+      // Swallow everything left over from the run (and the frantic mashing
+      // that follows a death) until the button is actually up.
+      this.input.takeConfirm();
+      this.input.takeRelease();
+      if (!this.input.holding) this.deadGate = false;
+    } else if (this.deadTime > 0.8 && (this.input.takeConfirm() || this.input.takeRelease())) {
       this.start();
     }
   }
