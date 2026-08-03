@@ -3,3 +3,6 @@ node_modules/
 dist/
 *.zip
 .DS_Store
+promo/shot-*.png
+promo/thumbnail.png
+promo/AFTERBURN-web.zip

@@ -19,6 +19,69 @@ import { IS_TOUCH, drawUI, drawVec, fitVec, uiWidth, vecWidth } from './text';
 const stage = (t: number, start: number, dur: number) =>
   easeOutQuint(clamp01((t - start) / dur));
 
+// ------------------------------------------------------------------- socials
+/**
+ * The developer's handles, drawn as one measured, centred unit with real vector
+ * marks rather than pasted logos: a bare "@name" floats with no home, and a
+ * bitmap logo would be the only non-vector thing in the game. Each mark is
+ * simple enough to survive ten pixels — the X is two strokes, the camera is a
+ * rounded square, a ring and a dot — and both are drawn in the game's own dim
+ * ink so the plate reads as part of the colophon, not as an advert.
+ */
+function drawSocials(ctx: CanvasRenderingContext2D, cx: number, y: number, S: number, alpha: number) {
+  if (alpha <= 0.002) return;
+  const size = 10 * S;
+  const st = { size, weight: 700, tracking: 1.9 * S } as const;
+  const H1 = '@PRIMEDEVV';
+  const H2 = 'OFFICIALPRIMEDEV';
+  const icon = 11 * S;
+  const gap = 6 * S;
+  const sep = 26 * S;
+  const w1 = uiWidth(ctx, H1, st);
+  const w2 = uiWidth(ctx, H2, st);
+  let total = icon + gap + w1 + sep + icon + gap + w2;
+  const k = Math.min(1, (view.w * 0.94) / total);
+  total *= k;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx - total * 0.5, y);
+  ctx.scale(k, k);
+  ctx.strokeStyle = rgba(COL.dim, 0.95);
+  ctx.fillStyle = rgba(COL.dim, 0.95);
+  ctx.lineCap = 'round';
+
+  // X: two crossing strokes, the second broken to read as the wordmark and not
+  // as a multiplication sign.
+  ctx.lineWidth = 1.8 * S;
+  const xr = icon * 0.36;
+  ctx.beginPath();
+  ctx.moveTo(-xr, -xr);
+  ctx.lineTo(xr, xr);
+  ctx.moveTo(xr, -xr);
+  ctx.lineTo(xr * 0.18, -xr * 0.18);
+  ctx.moveTo(-xr * 0.18, xr * 0.18);
+  ctx.lineTo(-xr, xr);
+  ctx.stroke();
+  drawUI(ctx, H1, icon * 0.5 + gap, 0.5, { ...st, color: rgba(COL.dim, 1) });
+
+  // Instagram: rounded square, lens ring, indicator dot.
+  ctx.translate(icon + gap + w1 + sep, 0);
+  const ir = icon * 0.46;
+  ctx.lineWidth = 1.5 * S;
+  ctx.beginPath();
+  ctx.roundRect(-ir, -ir, ir * 2, ir * 2, ir * 0.42);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, ir * 0.42, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(ir * 0.52, -ir * 0.52, 1.1 * S, 0, Math.PI * 2);
+  ctx.fill();
+  drawUI(ctx, H2, icon * 0.5 + gap, 0.5, { ...st, color: rgba(COL.dim, 1) });
+  ctx.restore();
+}
+
 export function drawScreens(ctx: CanvasRenderingContext2D, game: Game) {
   if (game.state === 'title') drawTitle(ctx, game);
   else if (game.state === 'paused') drawPause(ctx, game);
@@ -505,11 +568,14 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
     ctx.restore();
   }
 
-  // --- jam plate. Small print grounds a title screen in a real occasion the
-  //     way a colophon grounds a book; its job is to be almost unnoticed.
+  // --- colophon. Small print grounds a title screen in a real occasion the
+  //     way a colophon grounds a book; its job is to be almost unnoticed. The
+  //     handles sit one step above the jam plate — quiet, but findable by
+  //     anyone who liked the game enough to read the bottom of the screen.
+  drawSocials(ctx, cx, view.h - 38 * S, S, stage(t, SHIP_LAND + 1.05, 0.7) * 0.85);
   ctx.save();
   ctx.globalAlpha = stage(t, SHIP_LAND + 1.15, 0.7) * 0.55;
-  drawUI(ctx, 'MICRO JAM 062  ·  THEME: SPEED', cx, view.h - 16 * S, {
+  drawUI(ctx, 'MICRO JAM 062  ·  THEME: SPEED  ·  A GAME BY PRIMEDEV', cx, view.h - 16 * S, {
     size: 9.5 * S,
     weight: 600,
     tracking: 2.6 * S,
@@ -727,7 +793,9 @@ function drawResults(ctx: CanvasRenderingContext2D, game: Game) {
     ['WAVES CLEARED', pad(Math.max(0, game.wave - 1))],
     ['KILLS', String(game.kills)],
     ['BEST CHAIN', `×${game.bestCombo}`],
-    ['BEST STRIKE', game.bestMulti > 1 ? `${game.bestMulti} KILLS` : '—'],
+    // A plain hyphen: the display face has no em-dash, and a missing glyph
+    // renders as a tofu box right in the middle of the score table.
+    ['BEST STRIKE', game.bestMulti > 1 ? `${game.bestMulti} KILLS` : '-'],
     ['TIME ELAPSED', formatTime(game.runTime)],
   ];
   const tableY = top + 196 * S;
@@ -844,6 +912,10 @@ function drawResults(ctx: CanvasRenderingContext2D, game: Game) {
     });
     ctx.restore();
   }
+
+  // The one moment a player is most likely to follow: right after a run they
+  // cared about, while the score is still on screen.
+  drawSocials(ctx, cx, view.h - 22 * S, S, gp * 0.75);
 }
 
 function nextRank(score: number) {
