@@ -29,6 +29,15 @@ going live, while the jam's "new submissions" attention is hottest.
 > and a scoring system that pays you to be reckless. If you beat WAVE 05 I want
 > to hear about it.
 
+**Second reply — the title sequence (attach `title-anim.mp4`):**
+
+X autoplays video and loops anything under a minute, so this one earns its own
+slot rather than riding along with the launch post.
+
+> No font files, no video editor. The title is drawn as vector strokes by the
+> same code that draws the game, so the shards are literally pieces of the
+> letters. 9 seconds, rendered a frame at a time out of a canvas.
+
 ## Instagram (@OFFICIALPRIMEDEV)
 
 **Carousel: `thumbnail.png`, `shot-2-strike.png`, `shot-1-title.png`, `shot-3-aftermath.png`**

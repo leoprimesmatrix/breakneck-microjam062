@@ -125,6 +125,15 @@ All five are under itch's 3 MB per-image limit.
 - **Fallback / social image**: `thumbnail.png` (1260×1000, 1.4 MB — if the GIF
   is ever rejected, and for X/IG posts, which don't animate GIFs from itch links.
   It is the same image the GIF ends on, so the two are one lockup.)
+- **Title sequence**: `title-anim.mp4` (1920×1080, 60fps, 8.9 s, 4.5 MB) — the
+  wordmark shattering and reassembling on black, rendered from the game's own
+  display face. itch takes images only, so this is not a page upload: post it to
+  X/IG/YouTube, or paste a YouTube link into the description and itch will embed
+  the player. `title-anim.gif` (560×315, 2.7 MB) is the same piece as an image,
+  small enough for itch's 3 MB limit and for Discord — use it as an extra page
+  image if you want motion below the fold, never as the cover (`cover.gif` shows
+  gameplay, which is what sells the click). `title-still.png` is its last frame,
+  for anywhere a single flat lockup is wanted.
 - **Screenshots** (1600×900, 1.2–1.9 MB each), in this order — the first shows beside the cover most often:
   1. `shot-2-strike.png` — mid-strike, blade out, seeder contact card up
   2. `shot-1-title.png` — the title screen after the cold open
