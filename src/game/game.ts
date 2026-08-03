@@ -25,7 +25,7 @@ import {
 import { Audio } from '../engine/audio';
 import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
-import { TAU, clamp, damp, makeRng, randRange, type Rng } from '../engine/math';
+import { TAU, clamp, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
 import { Particles } from '../engine/particles';
 import { view } from '../viewport';
 import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
@@ -192,6 +192,10 @@ export class Game {
   private strikeBuffer = 0;
   /** Attract-mode ghost, so the title screen demonstrates the verb. */
   private ghostTimer = 0;
+  /** Seconds left in the ghost's hold. Above zero, the attract ship is aiming. */
+  private ghostAim = 0;
+  /** Where the ghost's hold is sweeping to. */
+  private ghostAngle = -Math.PI / 2;
 
   constructor(input: Input) {
     this.input = input;
@@ -284,6 +288,19 @@ export class Game {
     return this.state === 'play' && this.player.hull <= 1;
   }
 
+  /**
+   * Where in the stereo field something at arena X belongs.
+   *
+   * Kills, blocks, wall hits and orb pops all now carry their position into the
+   * mix, which costs one number per call and buys the single most convincing
+   * thing a small game can do with sound: an event on the left edge of the room
+   * is *heard* on the left. Deliberately short of hard-panned — anything past
+   * about 0.7 vanishes from one ear on headphones and reads as a fault.
+   */
+  private panAt(x: number) {
+    return clamp((x / Math.max(1, view.arenaW)) * 2 - 1, -1, 1) * 0.7;
+  }
+
   // --------------------------------------------------------------- lifecycle
   private beginAttract() {
     this.swarm.reset();
@@ -292,6 +309,10 @@ export class Game {
     this.burns.length = 0;
     this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
     this.player.reset();
+    this.ghostAim = 0;
+    this.ghostTimer = 0.5;
+    this.aiming = false;
+    this.aim = null;
     // NB: titleTime is deliberately *not* reset here. Attract mode restocks the
     // field whenever it runs dry, and resetting the clock would restart the
     // wordmark's draw-on every few seconds — the title would never settle.
@@ -340,6 +361,11 @@ export class Game {
     this.focusTaught = 0;
     this.focusPending = false;
     this.strikeBuffer = 0;
+    // The attract ghost may have been mid-hold when the player pressed start.
+    this.ghostAim = 0;
+    this.aiming = false;
+    this.aim = null;
+    this.aimBlend = 0;
 
     this.state = 'play';
     this.audio.setRunning(true);
@@ -461,20 +487,14 @@ export class Game {
     }
 
     this.titleTime += dtReal;
-    const dt = dtReal * 0.6;
+    // The ghost flies first: it decides whether the room is in slow motion.
+    this.stepAttract(dtReal);
+    const dt = dtReal * 0.6 * this.timeScale;
     this.swarm.targetX = view.arenaW * 0.5 + Math.cos(this.clock * 0.4) * 260;
     this.swarm.targetY = view.arenaH * 0.5 + Math.sin(this.clock * 0.31) * 170;
     this.swarm.update(dt);
     this.particles.update(dt);
     this.stepMarks(dt);
-
-    // A ghost strike every few seconds, so the title screen teaches the verb
-    // before a single word of instruction is read.
-    this.ghostTimer -= dtReal;
-    if (this.ghostTimer <= 0) {
-      this.ghostTimer = randRange(this.rng, 1.6, 2.8);
-      this.ghostStrike();
-    }
 
     // The gesture that ignited the title is still sitting in the input buffer:
     // it was pressed during standby, but it is released a frame or two *after*
@@ -492,35 +512,156 @@ export class Game {
     this.input.takeRelease();
   }
 
-  /** Attract-mode flourish: kill something on screen with a visible line. */
-  private ghostStrike() {
-    const live = this.swarm.list.filter((e) => e.alive && e.spawn <= 0);
-    if (!live.length) {
-      this.beginAttract();
+  /**
+   * The attract show — the title screen flying the game's only verb.
+   *
+   * The old version was a teleport with a particle burst stapled to it: it
+   * called `begin` (which sets the hull's elongation to full), assigned the
+   * player straight to the far end of the line, and ended the strike in the
+   * same frame. Nothing ever called `player.tick` on the title screen, so the
+   * three things that tick decays — stretch, charge, roll — never decayed. The
+   * ship sat in the middle of the title permanently scaled 3.3x along its nose
+   * and squashed to 0.58 across, frozen, with an afterimage trail whose
+   * lifetimes were never counted down either. It read as a rendering bug
+   * because it was one.
+   *
+   * Now the ghost runs the player's own code path — `tick`, `drift`,
+   * `advanceStrike`, `endStrike` — and plays the full beat: drift, hold (the
+   * room slows and the aim line finds its targets, live), commit, and coast
+   * out on the momentum the strike leaves behind. The title screen shows the
+   * hold *and* the release, which is the half of the verb it was never
+   * teaching, and the ship is a machine in flight rather than a smear.
+   */
+  private stepAttract(dtReal: number) {
+    const p = this.player;
+
+    // Slow motion while the ghost holds, exactly as `stepPlay` does it, so the
+    // title's dilation and the game's are the same effect and not two.
+    const target = p.striking ? 1 : this.aiming ? AIM_TIMESCALE : 1;
+    const ease = target > this.timeScale ? TIMESCALE_EASE * 0.28 : TIMESCALE_EASE;
+    this.timeScale = damp(this.timeScale, target, 1 / ease, dtReal);
+    // Deliberately short of the full 1 the player's hold reaches: the title
+    // already has a scrim over the room, and stacking the aim vignette on top
+    // of it at full strength buries the attract show it exists to frame.
+    this.aimBlend = damp(this.aimBlend, this.aiming ? 0.55 : 0, 14, dtReal);
+
+    p.tick(dtReal, this.aiming);
+
+    if (p.striking) {
+      // Strikes run on real time. Everything else on the title is dilated, and
+      // a dilated strike is a slow strike — the one thing this game must never
+      // look like.
+      const done = p.advanceStrike(dtReal, this.hitBuf);
+      for (const i of this.hitBuf) this.ghostHit(i);
+      if (done) this.ghostFinish();
       return;
     }
-    const t = live[Math.floor(this.rng() * live.length)];
-    const a = Math.atan2(t.y - this.player.y, t.x - this.player.x);
-    const plan = solveStrike(this.swarm, this.player.x, this.player.y, a);
-    this.player.begin(clonePlan(plan));
 
-    for (const h of plan.hits) {
-      if (h.blocked || !h.enemy) continue;
-      h.enemy.alive = false;
-      const col = ENEMY_COL[h.enemy.kind];
-      this.particles.shatter(
-        h.enemy.x, h.enemy.y, silhouette(h.enemy.kind, h.enemy.r), h.enemy.rot,
-        col, plan.dx * 200, plan.dy * 200, this.rng,
-      );
-      this.particles.burst(h.enemy.x, h.enemy.y, col, 12, 1, this.rng);
-      this.particles.ring(h.enemy.x, h.enemy.y, col, 78, 0.4, 2.5);
-      this.addBurn(h.enemy.x, h.enemy.y, h.enemy.r * 2.1, col);
+    if (this.ghostAim > 0) {
+      // Holding. The aim sweeps onto the target rather than snapping to it, so
+      // the preview line visibly acquires — the same read the player gets.
+      this.ghostAim -= dtReal;
+      this.aimAngle = dampAngle(this.aimAngle, this.ghostAngle, 6, dtReal);
+      this.aim = solveStrike(this.swarm, p.x, p.y, this.aimAngle, 0);
+      if (this.ghostAim <= 0) this.ghostLaunch();
+    } else {
+      this.aiming = false;
+      this.aim = null;
+      this.ghostTimer -= dtReal;
+      if (this.ghostTimer <= 0) this.ghostAcquire();
     }
-    this.player.x = plan.x0 + plan.dx * plan.dist;
-    this.player.y = plan.y0 + plan.dy * plan.dist;
-    this.addScar(plan.x0, plan.y0, this.player.x, this.player.y);
-    this.player.endStrike();
-    this.juice.addShake(4);
+
+    p.drift(dtReal * 0.6 * this.timeScale, this.aimAngle);
+  }
+
+  /** Pick something worth killing and start the hold. */
+  private ghostAcquire() {
+    const live = this.swarm.list.filter((e) => e.alive && e.spawn <= 0 && !this.shielded(e));
+    if (!live.length) {
+      this.beginAttract();
+      this.ghostTimer = 0.6;
+      return;
+    }
+    // Prefer the angle that takes the most with it — the attract show should
+    // demonstrate the game being played well, not adequately.
+    let best = live[0];
+    let bestKills = -1;
+    const tries = Math.min(live.length, 5);
+    for (let i = 0; i < tries; i++) {
+      const e = live[Math.floor(this.rng() * live.length)];
+      const a = Math.atan2(e.y - this.player.y, e.x - this.player.x);
+      const k = solveStrike(this.swarm, this.player.x, this.player.y, a, 0).kills;
+      if (k > bestKills) {
+        bestKills = k;
+        best = e;
+      }
+    }
+    this.ghostAngle = Math.atan2(best.y - this.player.y, best.x - this.player.x);
+    this.ghostAim = randRange(this.rng, 0.55, 0.85);
+    this.aiming = true;
+  }
+
+  /** Is this thing behind a shield that faces us? Attract mode never whiffs. */
+  private shielded(e: Enemy) {
+    if (e.kind !== 'ward') return false;
+    const plan = solveStrike(this.swarm, this.player.x, this.player.y,
+      Math.atan2(e.y - this.player.y, e.x - this.player.x), 0);
+    return plan.blocked;
+  }
+
+  private ghostLaunch() {
+    const p = this.player;
+    this.ghostAim = 0;
+    this.aiming = false;
+    p.begin(clonePlan(solveStrike(this.swarm, p.x, p.y, this.aimAngle, 0)));
+    this.aim = null;
+    this.juice.addKick(p.plan!.dx, p.plan!.dy, 5);
+    this.juice.addFringe(0.4);
+    this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, COL.strike, 8, this.rng);
+    this.particles.ring(p.x, p.y, COL.strike, 66, 0.28, 2.6);
+  }
+
+  /**
+   * A kill in attract mode: all of the spectacle, none of the bookkeeping. No
+   * score, no combo, no tutorial state — the title screen must never leave a
+   * number behind for the run that follows it to inherit.
+   */
+  private ghostHit(index: number) {
+    const plan = this.player.plan;
+    if (!plan) return;
+    const h = plan.hits[index];
+    const e = h.enemy;
+    if (h.blocked || !e || !e.alive) return;
+
+    e.alive = false;
+    const col = ENEMY_COL[e.kind];
+    const ang = Math.atan2(plan.dy, plan.dx);
+    if (e.kind === 'seeder') this.swarm.burst(e, this.rng);
+    this.particles.shatter(
+      e.x, e.y, silhouette(e.kind, e.r), e.rot, col, plan.dx * 240, plan.dy * 240, this.rng,
+    );
+    this.particles.burst(e.x, e.y, col, 16, 1, this.rng);
+    this.particles.ring(e.x, e.y, col, 92, 0.4, 3.2);
+    this.particles.ring(e.x, e.y, COL.playerCore, 44, 0.22, 2);
+    this.particles.plate(e.x, e.y, ang, COL.playerCore, 140);
+    this.particles.spall(e.x, e.y, ang, col, 9, this.rng);
+    this.addBurn(e.x, e.y, e.r * 2.1, col);
+    this.player.strikeKills++;
+
+    // Half the shake and none of the hitstop of a real kill: the title is being
+    // watched, not played, and a menu that stutters reads as a menu that lags.
+    this.juice.addShake(5 + Math.min(7, this.player.strikeKills * 1.5));
+    this.juice.addFlash(0.06, col);
+    this.juice.addKick(plan.dx, plan.dy, 2.5);
+  }
+
+  private ghostFinish() {
+    const p = this.player;
+    const plan = p.plan;
+    if (plan) this.addScar(plan.x0, plan.y0, p.x, p.y);
+    if (p.strikeKills >= 2) this.juice.addFlash(0.1 + p.strikeKills * 0.03, COL.strike);
+    p.endStrike();
+    this.ghostTimer = randRange(this.rng, 0.9, 1.7);
 
     // Keep the attract field stocked.
     if (this.swarm.liveCount < 5) {
@@ -805,7 +946,7 @@ export class Game {
     // movement. Everything you do to reposition is a strike.
     if (first && this.runs < 3) this.moveTaught = 3.4;
 
-    this.audio.onStrike(plan.hits.length);
+    this.audio.onStrike(plan.hits.length, this.panAt(p.x));
     this.juice.addPunch(0.05 + Math.min(0.06, plan.kills * 0.014));
     this.juice.addKick(plan.dx, plan.dy, 7);
     this.juice.addFringe(0.5);
@@ -875,7 +1016,7 @@ export class Game {
     // whole screen with it.
     this.juice.addKick(dx, dy, 3.5);
     this.juice.addFringe(0.35);
-    this.audio.onKill(e.kind, n, this.combo);
+    this.audio.onKill(e.kind, n, this.combo, this.panAt(e.x));
 
     if (this.runs < 3 && this.kills === 1) {
       if (this.moveTaught > 0) this.focusPending = true;
@@ -893,7 +1034,7 @@ export class Game {
     this.particles.plate(o.x, o.y, Math.atan2(dy, dx), COL.playerCore, 54);
     this.juice.addHitstop(0.01);
     this.juice.addShake(3);
-    this.audio.onOrbPop();
+    this.audio.onOrbPop(this.panAt(o.x));
   }
 
   private onBlocked(e: Enemy, x: number, y: number) {
@@ -914,7 +1055,7 @@ export class Game {
     this.particles.ring(x, y, COL.ward, 96, 0.42, 4);
     this.particles.spall(x, y, away, COL.ward, 16, this.rng);
     this.pushPopup(x, y - 40, 'BLOCKED', 'FLANK IT', 'bad', COL.ward);
-    this.audio.onBlocked();
+    this.audio.onBlocked(this.panAt(x));
   }
 
   private finishStrike() {
@@ -933,7 +1074,7 @@ export class Game {
       this.juice.addShake(11);
       this.juice.addKick(plan.dx, plan.dy, 9);
       this.juice.addPunch(0.04);
-      this.audio.onWall();
+      this.audio.onWall(this.panAt(p.x));
     } else if (plan && !plan.blocked && n === 0) {
       // The whiff. A strike that kills nothing and stops mid-air used to end
       // in total silence — no particles, no shake, no sound, the launch whoosh
@@ -945,7 +1086,7 @@ export class Game {
       this.particles.ring(p.x, p.y, COL.strike, 56, 0.26, 2.5);
       this.juice.addShake(4);
       this.juice.addKick(plan.dx, plan.dy, 4);
-      this.audio.onArrive();
+      this.audio.onArrive(this.panAt(p.x));
     }
 
     if (n >= 2) {
@@ -957,7 +1098,7 @@ export class Game {
       this.juice.addFlash(0.16 + n * 0.05, COL.strike);
       this.juice.addSlowmo(Math.min(0.34, 0.1 + n * 0.05));
       this.juice.addShake(10 + n * 2);
-      this.audio.onMulti(n);
+      this.audio.onMulti(n, this.panAt(p.x));
     }
 
     p.endStrike();
@@ -1007,7 +1148,7 @@ export class Game {
     this.particles.ring(p.x, p.y, col, 92, 0.4, 3);
     this.addBurn(p.x, p.y, 34, COL.danger);
     this.pushPopup(p.x, p.y - 46, `-1 HULL`, '', 'bad', COL.danger, 1.05);
-    this.audio.onHurt(p.hull);
+    this.audio.onHurt(p.hull, this.panAt(p.x));
   }
 
   // ------------------------------------------------------------------ waves

@@ -60,7 +60,10 @@ export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   drawSpawns(ctx, game);
   drawEnemies(ctx, game);
   drawOrbs(ctx, game);
-  if (game.aim && game.state === 'play') drawAim(ctx, game, game.aim);
+  // The attract ghost aims for real now, and its preview line is the clearest
+  // statement of the verb the title screen can make: this is what the hold
+  // shows you, and this is what the release does about it.
+  if (game.aim && (game.state === 'play' || game.state === 'title')) drawAim(ctx, game, game.aim);
   game.particles.draw(ctx);
   // Before ignition there is no ship. The cold open flies it in as the title's
   // emblem; a hull already parked in the dark room both spoils that arrival
