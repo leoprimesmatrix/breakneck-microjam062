@@ -101,7 +101,12 @@ export class Audio {
 
   private ctx: AudioContext | null = null;
   private master!: GainNode;
+  private limiter!: DynamicsCompressorNode;
   private sfx!: GainNode;
+  private sfxComp!: DynamicsCompressorNode;
+  /** The room. One convolver, fed by a send off the SFX bus. */
+  private verb!: ConvolverNode;
+  private verbSend!: GainNode;
   private music!: GainNode;
   private musicFilter!: BiquadFilterNode;
   private trackBus!: GainNode;
@@ -149,13 +154,71 @@ export class Audio {
       const ctx = new Ctor();
       this.ctx = ctx;
 
+      /**
+       * The mix, in order, and why each link is there.
+       *
+       * A synthesised game usually gives itself away in the bus structure
+       * rather than in the voices: a dozen bare oscillators wired straight to
+       * the destination will clip the instant three of them land together, sit
+       * in no space at all, and get louder in exact proportion to how much is
+       * happening — which is precisely backwards, because the busiest moment is
+       * the one the player most needs to read.
+       *
+       *   voices → [pan] → sfx → soft clip → glue comp → master → limiter → out
+       *                                   └→ send → room ──────┘
+       *
+       * The soft clip rounds transients instead of squaring them off, the glue
+       * compressor makes a five-kill chain sit *behind* the first kill rather
+       * than five times in front of it, the room gives every sound the same
+       * space so they belong to one place, and the limiter is the seatbelt: the
+       * music and the effects are summed there and nothing downstream of it can
+       * distort no matter how many things die at once.
+       */
+      this.limiter = ctx.createDynamicsCompressor();
+      this.limiter.threshold.value = -2;
+      this.limiter.knee.value = 4;
+      this.limiter.ratio.value = 14;
+      this.limiter.attack.value = 0.002;
+      this.limiter.release.value = 0.16;
+      this.limiter.connect(ctx.destination);
+
       this.master = ctx.createGain();
       this.master.gain.value = this.muted ? 0 : 0.85;
-      this.master.connect(ctx.destination);
+      this.master.connect(this.limiter);
+
+      // A small, dark plate. Long enough to be a room, short enough that a
+      // chain of kills does not turn into a wash.
+      this.verb = ctx.createConvolver();
+      this.verb.buffer = this.impulse(ctx, 1.05, 3.4);
+      const verbReturn = ctx.createGain();
+      verbReturn.gain.value = 0.85;
+      this.verb.connect(verbReturn).connect(this.master);
+
+      this.sfxComp = ctx.createDynamicsCompressor();
+      // Threshold measured, not guessed: at -19 dB the glue was catching the
+      // lock tick and the UI blips as well, which flattened the quiet end of
+      // the mix into the loud end and cost the instrumentation its distance.
+      // -14 leaves everything below a kill untouched and only leans on the
+      // events that pile up.
+      this.sfxComp.threshold.value = -14;
+      this.sfxComp.knee.value = 12;
+      this.sfxComp.ratio.value = 2.8;
+      this.sfxComp.attack.value = 0.003;
+      this.sfxComp.release.value = 0.13;
+
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = Audio.softClip();
+      shaper.oversample = '2x';
 
       this.sfx = ctx.createGain();
-      this.sfx.gain.value = 0.9;
-      this.sfx.connect(this.master);
+      this.sfx.gain.value = 0.82;
+      this.sfx.connect(shaper).connect(this.sfxComp).connect(this.master);
+
+      // Post-compressor send: the room hears what the mix hears, so a squashed
+      // chain does not throw a full-strength tail per kill.
+      this.verbSend = ctx.createGain();
+      this.verbSend.gain.value = 0.17;
+      this.sfxComp.connect(this.verbSend).connect(this.verb);
 
       this.musicFilter = ctx.createBiquadFilter();
       this.musicFilter.type = 'lowpass';
@@ -336,6 +399,48 @@ export class Audio {
   }
 
   // ------------------------------------------------------------------ voices
+  /**
+   * A soft clipper, not a distortion. `tanh` rounds the top of a transient
+   * where a hard ceiling would square it off, which is the difference between
+   * a hit that sounds loud and a hit that sounds broken.
+   */
+  private static curve: Float32Array<ArrayBuffer> | null = null;
+  private static softClip() {
+    if (Audio.curve) return Audio.curve;
+    const n = 2048;
+    const c = new Float32Array(new ArrayBuffer(n * 4));
+    const k = 1.7;
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      c[i] = Math.tanh(x * k) / Math.tanh(k);
+    }
+    Audio.curve = c;
+    return c;
+  }
+
+  /**
+   * The room, synthesised: decaying noise, one-pole low-passed so the tail is
+   * dark. White noise shaped by an envelope alone sounds like a cymbal being
+   * faded out; rooms lose their top end first, and that single filter is what
+   * makes this read as a space rather than as an effect.
+   *
+   * The two channels are generated independently, which is the whole reason to
+   * bother — decorrelated tails are what a listener hears as width.
+   */
+  private impulse(ctx: BaseAudioContext, seconds: number, decay: number) {
+    const len = Math.floor(ctx.sampleRate * seconds);
+    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let prev = 0;
+      for (let i = 0; i < len; i++) {
+        prev = prev * 0.74 + (Math.random() * 2 - 1) * 0.26;
+        d[i] = prev * (1 - i / len) ** decay;
+      }
+    }
+    return buf;
+  }
+
   private env(node: AudioNode, peak: number, attack: number, decay: number, when: number) {
     const g = this.ctx!.createGain();
     g.gain.setValueAtTime(0.0001, when);
@@ -345,6 +450,49 @@ export class Audio {
     return g;
   }
 
+  /**
+   * Where a voice lands in the mix.
+   *
+   * Panning by where the thing actually was is the cheapest realism in the
+   * file: a kill on the left edge of the arena belongs on the left, and once
+   * that is true the arena stops being a picture with a soundtrack. Kept well
+   * short of hard-panned — a sound that leaves one speaker entirely reads as a
+   * bug on headphones.
+   */
+  private out(pan: number, wet = 0): AudioNode {
+    const ctx = this.ctx!;
+    let node: AudioNode = this.sfx;
+    if (pan && ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-0.85, Math.min(0.85, pan));
+      p.connect(this.sfx);
+      node = p;
+    }
+    if (wet > 0) {
+      // An extra shove into the room for the events that deserve to ring: the
+      // send off the bus is deliberately conservative so the small stuff stays
+      // dry and close.
+      const s = ctx.createGain();
+      s.gain.value = wet;
+      s.connect(this.verb);
+      const fan = ctx.createGain();
+      fan.gain.value = 1;
+      fan.connect(node);
+      fan.connect(s);
+      return fan;
+    }
+    return node;
+  }
+
+  /**
+   * One tonal voice.
+   *
+   * Two things here are new and both are the difference between "synthesised"
+   * and "sounds like a game": every pitch is jittered by a few cents, so the
+   * same event fired ten times in two seconds never phases into a machine gun;
+   * and a voice can carry its own low-pass with its own sweep, which is how a
+   * body sound gets to open and close rather than just get louder and quieter.
+   */
   private tone(
     freq: number,
     type: OscillatorType,
@@ -352,15 +500,36 @@ export class Audio {
     decay: number,
     when: number,
     bend = 1,
-    bus: GainNode = this.sfx,
+    v: {
+      pan?: number;
+      wet?: number;
+      attack?: number;
+      cutoff?: number;
+      sweep?: number;
+      q?: number;
+      jitter?: number;
+    } = {},
   ) {
     const ctx = this.ctx!;
+    const f = freq * (1 + (Math.random() - 0.5) * (v.jitter ?? 0.014));
     const osc = ctx.createOscillator();
     osc.type = type;
-    osc.frequency.setValueAtTime(freq, when);
-    if (bend !== 1) osc.frequency.exponentialRampToValueAtTime(freq * bend, when + decay);
-    const g = this.env(osc, peak, 0.004, decay, when);
-    g.connect(bus);
+    osc.frequency.setValueAtTime(f, when);
+    if (bend !== 1) osc.frequency.exponentialRampToValueAtTime(f * bend, when + decay);
+
+    let src: AudioNode = osc;
+    if (v.cutoff) {
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'lowpass';
+      filt.frequency.setValueAtTime(v.cutoff, when);
+      if (v.sweep) filt.frequency.exponentialRampToValueAtTime(v.sweep, when + decay);
+      filt.Q.value = v.q ?? 0.8;
+      osc.connect(filt);
+      src = filt;
+    }
+
+    const g = this.env(src, peak, v.attack ?? 0.004, decay, when);
+    g.connect(this.out(v.pan ?? 0, v.wet ?? 0));
     osc.start(when);
     osc.stop(when + decay + 0.08);
   }
@@ -372,21 +541,75 @@ export class Audio {
     freq: number,
     type: BiquadFilterType = 'bandpass',
     sweepTo = 0,
+    v: { pan?: number; wet?: number; q?: number; attack?: number } = {},
   ) {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     src.playbackRate.value = 0.8 + Math.random() * 0.5;
+    // Start somewhere random in a two-second buffer, so the same noise burst is
+    // never literally the same waveform twice.
+    const off = Math.random() * 1.4;
     const filt = ctx.createBiquadFilter();
     filt.type = type;
     filt.frequency.setValueAtTime(freq, when);
     if (sweepTo) filt.frequency.exponentialRampToValueAtTime(sweepTo, when + decay);
-    filt.Q.value = 1.2;
+    filt.Q.value = v.q ?? 1.2;
     src.connect(filt);
-    const g = this.env(filt, peak, 0.003, decay, when);
-    g.connect(this.sfx);
-    src.start(when);
+    const g = this.env(filt, peak, v.attack ?? 0.003, decay, when);
+    g.connect(this.out(v.pan ?? 0, v.wet ?? 0));
+    src.start(when, off);
     src.stop(when + decay + 0.1);
+  }
+
+  /**
+   * The transient. Two milliseconds of high noise on the front of a sound,
+   * doing nothing you could hum and everything for whether the hit reads as
+   * contact. It is the single most-missed ingredient in synthesised game
+   * audio — without it every event sounds like it *faded in*, however fast.
+   */
+  private click(when: number, peak: number, freq = 3600, pan = 0) {
+    this.hiss(when, peak, 0.016, freq, 'highpass', 0, { pan, attack: 0.0006 });
+  }
+
+  /**
+   * Struck metal.
+   *
+   * A bell is not a chord — its partials are *inharmonic*, which is exactly why
+   * a stack of octaves and fifths sounds like a synthesiser and these ratios
+   * sound like something got hit. Higher partials decay faster, as they do in
+   * anything physical.
+   */
+  private metal(
+    when: number,
+    base: number,
+    peak: number,
+    decay: number,
+    pan = 0,
+    wet = 0.35,
+    ratios: readonly number[] = [1, 1.73, 2.61, 3.94, 5.42],
+  ) {
+    ratios.forEach((r, i) => {
+      this.tone(base * r, i < 2 ? 'triangle' : 'sine', peak / (1 + i * 1.35), decay / (1 + i * 0.7),
+        when, 1, { pan, wet: i === 0 ? wet : 0, jitter: 0.02 });
+    });
+  }
+
+  /**
+   * A body. Pitch dropping fast under an amplitude envelope — the same
+   * construction as a kick drum, because a kick drum is what "something heavy
+   * happened here" sounds like.
+   */
+  private thump(when: number, from: number, to: number, peak: number, decay: number, pan = 0) {
+    const ctx = this.ctx!;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(from, when);
+    osc.frequency.exponentialRampToValueAtTime(to, when + decay * 0.7);
+    const g = this.env(osc, peak, 0.003, decay, when);
+    g.connect(this.out(pan));
+    osc.start(when);
+    osc.stop(when + decay + 0.08);
   }
 
   private startDrone() {
@@ -435,28 +658,72 @@ export class Audio {
   }
 
   // --------------------------------------------------------------------- sfx
-  onStrike(targets: number) {
+  /**
+   * Every effect below is built the same way, and it is the way effects are
+   * built when someone is being paid to do it:
+   *
+   *   TRANSIENT  a click or a noise spit, ~2 ms, no pitch — *contact*
+   *   BODY       the pitched part, usually with its own filter moving — *what*
+   *   TAIL       noise or partials decaying out — *where, and how big*
+   *
+   * A single oscillator with an amplitude envelope gives you the middle one
+   * only, which is why one-line synth effects all sound like a phone menu.
+   *
+   * The mix order is load-bearing and was *measured* off the bus rather than
+   * guessed from the peak arguments — which is the only way to get it right,
+   * because the glue compressor moves every one of these numbers. Peak level
+   * at the compressor output, one voice at a time:
+   *
+   *   ui .07 < lock .12 < strike .51 < kill .59 ≈ wall .59 ≈ blocked .61 ≈
+   *   hurt .62 < multi .62–.66 < death .77 < five-kill chain .83
+   *
+   * Failure is loud because failure is information; the multi-kill is louder
+   * still, because it is the only thing in the game the player is chasing.
+   */
+  onStrike(targets: number, pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    // A rising whoosh: bandpass sweeping up is the cheapest convincing "fast".
-    this.hiss(t, 0.22, 0.24, 500, 'bandpass', 5200);
-    this.tone(hz(24), 'sawtooth', 0.1, 0.16, t, 2.4);
-    if (targets > 0) this.tone(hz(36), 'sine', 0.06, 0.1, t, 1.6);
+    // The launch. A body leaving at speed is three things at once: the shove
+    // (a sub dropping), the tear (a saw opening a low-pass as it climbs) and
+    // the air (noise sweeping up). The old version had only the air.
+    this.click(t, 0.09, 4200, pan);
+    this.thump(t, 230, 62, 0.17, 0.2, pan);
+    this.tone(160, 'sawtooth', 0.12, 0.2, t, 3.1, {
+      pan, cutoff: 520, sweep: 5200, q: 2.4,
+    });
+    this.hiss(t, 0.2, 0.3, 420, 'bandpass', 6200, { pan, wet: 0.12, q: 0.9 });
+    // Committing to a line with something on it is a different act from
+    // committing to an empty one, and the ear should know before the eye does.
+    if (targets > 0) this.tone(hz(36), 'sine', 0.06, 0.12, t, 1.6, { pan });
   }
 
-  onKill(kind: EnemyKind, chainIndex: number, combo: number) {
+  onKill(kind: EnemyKind, chainIndex: number, combo: number, pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
     const i = Math.min(chainIndex, 24);
     const deg = PENTA[i % PENTA.length] + 12 * Math.min(3, Math.floor(i / PENTA.length));
     const f = hz(deg + 48);
-    // The chest. The chime above carries the melody of a chain, but everything
-    // it plays sits over 800 Hz — a body being destroyed needs weight under
-    // it, or the most-repeated reward in the game reads as UI feedback.
-    this.tone(hz(12), 'sine', 0.2 + Math.min(0.06, chainIndex * 0.015), 0.11, t, 0.5);
-    this.tone(f, KIND_WAVE[kind], 0.16, 0.13, t, 0.86);
-    this.tone(f * 2, 'sine', 0.05, 0.07, t);
-    this.hiss(t, 0.11, 0.06, 2600 + combo * 60, 'highpass');
+    const first = chainIndex <= 1;
+
+    this.click(t, 0.08, 3400, pan);
+    // The chest. Heaviest on the first kill and lighter down the chain: five
+    // sub thumps inside 60 ms sum into mud, and the chain's job is to get
+    // *brighter*, not lower.
+    this.thump(t, 175, 50, first ? 0.17 : 0.11, first ? 0.13 : 0.09, pan);
+    // The body of the thing that died. Each species keeps its own waveform —
+    // this is the only place in the mix where a player can hear *what* they
+    // killed — but it now speaks through a filter that opens with the chain.
+    this.tone(f, KIND_WAVE[kind], 0.15, 0.14, t, 0.86, {
+      pan, cutoff: 1200 + i * 900, sweep: 700, q: 1.4,
+    });
+    // Struck metal on top: inharmonic partials, so a kill rings like a hull
+    // being holed rather than like a note being played.
+    // Three partials rather than the full five: a kill is the most-repeated
+    // event in the game and a five-chain would otherwise build ~120 nodes
+    // inside 60 ms. The top two partials are the least of what makes it read
+    // as metal, and they are the first thing a weak machine should not pay for.
+    this.metal(t, f * 2, 0.055, 0.3 + Math.min(0.2, i * 0.04), pan, 0.3, [1, 1.73, 2.61]);
+    this.hiss(t, 0.1, 0.07, 2400 + combo * 60, 'highpass', 0, { pan });
   }
 
   /**
@@ -468,131 +735,176 @@ export class Audio {
   onLock(count: number) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(hz(52 + Math.min(count, 8) * 2), 'sine', 0.06, 0.06, t, 1.1);
-    this.hiss(t, 0.025, 0.03, 5600, 'highpass');
+    this.tone(hz(52 + Math.min(count, 8) * 2), 'sine', 0.05, 0.07, t, 1.1, {
+      attack: 0.002, jitter: 0.004,
+    });
+    this.click(t, 0.022, 6400);
   }
 
   /**
    * A strike arriving in empty air: the brake-thud. Deliberately the quietest
    * arrival in the game — a whiff must be *marked*, never rewarded.
    */
-  onArrive() {
+  onArrive(pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(66, 'sine', 0.1, 0.1, t, 0.55);
-    this.hiss(t, 0.05, 0.06, 700, 'lowpass');
+    this.thump(t, 96, 42, 0.13, 0.13, pan);
+    this.hiss(t, 0.05, 0.09, 620, 'lowpass', 0, { pan });
   }
 
-  onOrbPop() {
+  onOrbPop(pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(hz(60), 'sine', 0.09, 0.06, t, 1.8);
-    this.hiss(t, 0.06, 0.04, 4200, 'highpass');
+    this.click(t, 0.05, 5200, pan);
+    this.tone(hz(60), 'sine', 0.06, 0.07, t, 1.9, { pan, jitter: 0.05 });
   }
 
-  onMulti(n: number) {
+  onMulti(n: number, pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    // A stacked chord, each voice a beat late — the payoff should bloom.
+    // A stacked chord, each voice a beat late — the payoff should bloom, and
+    // it is the one moment in the game allowed to use the room properly.
     const degs = [0, 7, 12, 19, 24];
+    // The chord blooms, which means it has no front — and an event with no
+    // transient is one the ear files as music rather than as a thing that just
+    // happened. The crack goes on the front; the bloom stays behind it.
+    this.click(t, 0.16, 3000, pan * 0.5);
     for (let i = 0; i < Math.min(n, degs.length); i++) {
-      this.tone(hz(degs[i] + 24), i === 0 ? 'sawtooth' : 'triangle', 0.13 - i * 0.014, 0.5, t + i * 0.045);
+      this.tone(hz(degs[i] + 24), i === 0 ? 'sawtooth' : 'triangle',
+        0.155 - i * 0.015, 0.55, t + i * 0.045, 1, {
+          pan: pan * 0.5, wet: 0.4, cutoff: 2400 + i * 900, sweep: 900,
+        });
     }
-    this.hiss(t, 0.16, 0.5, 900, 'bandpass', 6000);
+    // Measured against the rest of the mix: a multi-kill landing *quieter* than
+    // the single kill inside it is the one ordering the ear will not forgive.
+    this.thump(t, 120, 44, 0.27, 0.26, pan * 0.5);
+    this.hiss(t, 0.16, 0.55, 800, 'bandpass', 6400, { wet: 0.5, q: 0.8 });
   }
 
-  onBlocked() {
+  onBlocked(pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    // Two detuned squares an augmented fourth apart: unmistakably "wrong".
-    this.tone(320, 'square', 0.16, 0.22, t, 0.6);
-    this.tone(453, 'square', 0.12, 0.2, t, 0.6);
-    this.hiss(t, 0.2, 0.16, 3000, 'bandpass');
+    // A shield stopping a ship: struck plate, and nothing tonal to enjoy about
+    // it. The ratios are wide and inharmonic — this must never sound like a
+    // note, because a note is a reward.
+    this.click(t, 0.14, 2600, pan);
+    this.metal(t, 300, 0.2, 0.42, pan, 0.45, [1, 1.41, 2.11, 2.98, 4.17]);
+    this.tone(190, 'square', 0.12, 0.26, t, 0.62, { pan, cutoff: 1400, sweep: 400 });
+    this.hiss(t, 0.18, 0.2, 2600, 'bandpass', 900, { pan, wet: 0.25 });
   }
 
-  onWall() {
+  onWall(pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    // Louder than a kill, softer than a hurt: the wall is a mistake, not a
-    // wound. The old 88 Hz at 0.16 registered below the kill chime, which made
-    // ramming a steel room at full speed feel softer than popping an orb.
-    this.tone(74, 'sine', 0.26, 0.18, t, 0.45);
-    this.hiss(t, 0.14, 0.09, 900, 'lowpass');
+    // Full speed into steel. Heavier than a kill, lighter than a wound — the
+    // wall is a mistake, not an injury.
+    this.click(t, 0.14, 2200, pan);
+    this.thump(t, 130, 38, 0.34, 0.2, pan);
+    this.metal(t, 148, 0.06, 0.34, pan, 0.3);
+    this.hiss(t, 0.13, 0.12, 780, 'lowpass', 0, { pan, wet: 0.2 });
   }
 
-  onHurt(hullLeft: number) {
+  onHurt(hullLeft: number, pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(240, 'sawtooth', 0.3, 0.5, t, 0.14);
-    this.hiss(t, 0.3, 0.34, 1400, 'lowpass');
-    if (hullLeft <= 1) this.tone(hz(1), 'sine', 0.2, 0.9, t, 0.5);
+    // Damage: a low saw collapsing through a closing filter, with the air
+    // knocked out of the room around it.
+    this.click(t, 0.12, 1800, pan);
+    this.tone(240, 'sawtooth', 0.3, 0.5, t, 0.14, { pan, cutoff: 2200, sweep: 260, q: 3 });
+    this.hiss(t, 0.28, 0.36, 1500, 'lowpass', 380, { pan, wet: 0.3 });
+    // One hull left. A slow low knell under the hit — the only sound in the
+    // game that is a warning rather than a report.
+    if (hullLeft <= 1) this.tone(hz(1), 'sine', 0.2, 1.1, t, 0.5, { wet: 0.4 });
   }
 
   onDeath() {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(420, 'sawtooth', 0.3, 1.3, t, 0.05);
-    this.hiss(t, 0.32, 0.9, 700, 'lowpass');
+    // The one place the room is allowed to be heard fully: everything else in
+    // this game is close and dry, so the tail on this reads as the arena
+    // emptying out.
+    this.tone(420, 'sawtooth', 0.3, 1.4, t, 0.05, { cutoff: 2600, sweep: 200, q: 2, wet: 0.5 });
+    this.hiss(t, 0.3, 1.0, 900, 'lowpass', 220, { wet: 0.6 });
+    this.thump(t, 150, 34, 0.3, 0.5);
     for (let i = 0; i < 3; i++) {
-      this.tone(hz(12 - i * 5), 'triangle', 0.12, 1.1, t + i * 0.1, 0.7);
+      this.tone(hz(12 - i * 5), 'triangle', 0.11, 1.2, t + i * 0.1, 0.7, { wet: 0.45 });
     }
+    // A knell over the collapse. Struck, low, and left to ring.
+    this.metal(t + 0.06, 196, 0.09, 1.6, 0, 0.6);
   }
 
   onHeal() {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    [0, 7, 12].forEach((d, i) => this.tone(hz(d + 36), 'triangle', 0.12, 0.3, t + i * 0.05));
+    [0, 7, 12].forEach((d, i) =>
+      this.tone(hz(d + 36), 'triangle', 0.11, 0.34, t + i * 0.05, 1, { wet: 0.3, cutoff: 3200 }),
+    );
   }
 
   onWave(n: number) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
+    // A door opening on the next room: three rising notes and a breath of air.
     const base = 24 + (n % 4) * 2;
-    [0, 5, 7].forEach((d, i) => this.tone(hz(base + d), 'sine', 0.1, 0.45, t + i * 0.09));
-    this.hiss(t, 0.08, 0.4, 4000, 'highpass');
+    [0, 5, 7].forEach((d, i) =>
+      this.tone(hz(base + d), 'sine', 0.1, 0.5, t + i * 0.09, 1, { wet: 0.3, cutoff: 2600 }),
+    );
+    this.thump(t, 110, 40, 0.14, 0.28);
+    this.hiss(t, 0.07, 0.45, 3600, 'highpass', 0, { wet: 0.25 });
   }
 
   onWaveClear() {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
     [0, 3, 7, 12].forEach((d, i) =>
-      this.tone(hz(d + 36), 'triangle', 0.11, 0.6, t + i * 0.06),
+      this.tone(hz(d + 36), 'triangle', 0.1, 0.65, t + i * 0.06, 1, {
+        wet: 0.35, cutoff: 2200 + i * 700,
+      }),
     );
   }
 
-  onLancerMark() {
+  onLancerMark(pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(660, 'square', 0.05, 0.1, t, 1.5);
+    // Two clipped beeps: a machine deciding where you are. Short, dry, and
+    // high enough to cut through everything else without being loud.
+    this.tone(760, 'square', 0.045, 0.05, t, 1, { pan, cutoff: 2600 });
+    this.tone(940, 'square', 0.04, 0.05, t + 0.075, 1, { pan, cutoff: 2600 });
   }
 
-  onLancerCharge() {
+  onLancerCharge(pan = 0) {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.hiss(t, 0.14, 0.3, 700, 'bandpass', 2600);
-    this.tone(150, 'sawtooth', 0.1, 0.3, t, 2.2);
+    // A capacitor filling. Rising on two fronts at once — noise band and saw
+    // pitch — which is the sound the ear reads as "about to happen".
+    this.hiss(t, 0.12, 0.34, 600, 'bandpass', 3000, { pan, q: 3 });
+    this.tone(150, 'sawtooth', 0.09, 0.34, t, 2.4, { pan, cutoff: 900, sweep: 3400 });
   }
 
-  onOrb() {
+  onOrb(pan = 0) {
     if (!this.enabled) return;
-    this.tone(520, 'sine', 0.045, 0.14, this.ctx!.currentTime, 0.7);
+    const t = this.ctx!.currentTime;
+    this.tone(520, 'sine', 0.045, 0.15, t, 0.68, { pan, cutoff: 2400, jitter: 0.05 });
+    this.click(t, 0.02, 5200, pan);
   }
 
   onHint() {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(hz(48), 'sine', 0.07, 0.2, t);
-    this.tone(hz(55), 'sine', 0.05, 0.24, t + 0.07);
+    this.tone(hz(48), 'sine', 0.06, 0.22, t, 1, { wet: 0.25 });
+    this.tone(hz(55), 'sine', 0.045, 0.26, t + 0.07, 1, { wet: 0.25 });
   }
 
   onComboLost() {
     if (!this.enabled) return;
-    this.tone(300, 'sine', 0.05, 0.2, this.ctx!.currentTime, 0.55);
+    const t = this.ctx!.currentTime;
+    // Down, dull, and gone. A loss should never be as pretty as a gain.
+    this.tone(300, 'sine', 0.05, 0.24, t, 0.52, { cutoff: 1200, sweep: 500 });
   }
 
   onUiMove() {
     if (!this.enabled) return;
-    this.tone(880, 'sine', 0.04, 0.05, this.ctx!.currentTime);
+    this.tone(880, 'sine', 0.035, 0.05, this.ctx!.currentTime, 1, { jitter: 0.006 });
   }
 
   // ------------------------------------------------------------------- music

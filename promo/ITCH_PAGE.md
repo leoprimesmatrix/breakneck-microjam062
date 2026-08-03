@@ -66,7 +66,8 @@ WASD nudges your drift · M mutes · P pauses (with a codex of everything that's
 
 ### Under the hood
 
-- Hand-built in **vanilla TypeScript + Canvas2D** — no engine, no sprites, no font files. The entire game — art, typeface, bloom pipeline and every sound effect — is **one 116 KB HTML file** that draws and synthesizes all of it at runtime.
+- Hand-built in **vanilla TypeScript + Canvas2D** — no engine, no sprites, no font files. The entire game — art, typeface, bloom pipeline and every sound effect — is **one 126 KB HTML file** that draws and synthesizes all of it at runtime.
+- Every sound is built the way a mixed one is: a transient, a body and a tail per effect, struck-metal partials for anything that gets hit, saturation and glue compression across the effects bus, a synthesized room behind it — and **every hit panned to where it happened in the arena**.
 - **Ten original tracks**, shuffled so nothing repeats until you have heard them all. Hold to aim and a low-pass closes over the music with you — slow motion you can hear.
 - Real post-processing: bloom, chromatic aberration, film grain, adaptive quality that keeps 60fps on weak hardware.
 - Persistent best score, ranks, and a strike-by-strike combo system built to be chased.
