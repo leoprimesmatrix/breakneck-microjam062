@@ -69,7 +69,8 @@ const FALL = fadeCurve(false);
 
 interface Deck {
   el: HTMLAudioElement;
-  gain: GainNode;
+  /** Null until `attach` wires the deck into an AudioContext. */
+  gain: GainNode | null;
   track: Track | null;
 }
 
@@ -84,14 +85,72 @@ export class Music {
   private failures = 0;
   private fadeEndsAt = 0;
   private playing = false;
+  private firstNote: (() => void) | null = null;
 
   constructor() {
     this.reshuffle();
+    this.prime();
   }
 
   /** True once a real track is actually coming out of the speakers. */
   get active() {
     return this.playing;
+  }
+
+  /**
+   * True once samples are genuinely flowing.
+   *
+   * Deliberately not the same question as `active`: `play()` resolves when the
+   * browser has *accepted* the request, which can be a beat before the first
+   * sample is heard. The title's cold open is timed against this, and a
+   * flashbulb that goes off before the downbeat is worse than no sync at all.
+   */
+  get audible() {
+    const d = this.decks[this.live];
+    return this.playing && !!d && !d.el.paused && d.el.currentTime > 0;
+  }
+
+  /**
+   * Run `cb` the instant the first track becomes audible.
+   *
+   * The title's cold open hangs off this. Polling `audible` from the frame loop
+   * would have been simpler, but it costs up to a frame of slack, and a
+   * flashbulb that lands after its own downbeat is exactly the thing this is
+   * meant to fix. The `playing` event is the earliest signal the platform gives.
+   */
+  onFirstNote(cb: () => void) {
+    if (this.audible) cb();
+    else this.firstNote = cb;
+  }
+
+  /**
+   * Create the elements and start pulling the first track down *before* any
+   * user gesture. Autoplay policy gates playback, not loading — so by the time
+   * someone clicks, the track is buffered and starts within a frame instead of
+   * a second later, which is the whole reason the cold open can be timed to it.
+   */
+  private prime() {
+    try {
+      for (let i = 0; i < 2; i++) {
+        const el = new window.Audio();
+        el.preload = 'auto';
+        // Deliberately no `crossOrigin`: the tracks always ship beside the HTML
+        // and so are always same-origin. Asking for CORS anyway gains nothing
+        // and adds an `Origin` header that a CDN is free to refuse — which
+        // would show up as a game with no music and no error to explain it.
+        //
+        // The decks are faded by the graph, not by the element; leaving the
+        // element's own volume anywhere but 1 would stack two attenuations.
+        el.volume = 1;
+        this.decks.push({ el, gain: null, track: null });
+      }
+      const first = this.decks[0];
+      first.track = this.take();
+      first.el.src = src(first.track.file);
+      first.el.load();
+    } catch {
+      this.decks = [];
+    }
   }
 
   /** Display name of what is playing, or null before the first track starts. */
@@ -132,43 +191,40 @@ export class Music {
    */
   attach(ctx: AudioContext, dest: AudioNode): boolean {
     if (this.ctx) return true;
+    if (!this.decks.length) return false;
     try {
-      for (let i = 0; i < 2; i++) {
-        const el = new window.Audio();
-        el.preload = 'auto';
-        // Deliberately no `crossOrigin`: the tracks always ship beside the HTML
-        // and so are always same-origin. Asking for CORS anyway gains nothing
-        // and adds an `Origin` header that a CDN is free to refuse — which
-        // would show up as a game with no music and no error to explain it.
-        //
-        // The decks are faded by the graph, not by the element; leaving the
-        // element's own volume anywhere but 1 would stack two attenuations.
-        el.volume = 1;
+      for (const deck of this.decks) {
         const gain = ctx.createGain();
         gain.gain.value = 0;
-        ctx.createMediaElementSource(el).connect(gain);
+        ctx.createMediaElementSource(deck.el).connect(gain);
         gain.connect(dest);
+        deck.gain = gain;
 
-        const deck: Deck = { el, gain, track: null };
         // Safety net. The crossfade normally advances things well before the
         // end, but a track whose duration never resolves (a stalled range
         // request, a browser that will not report it) would otherwise stop the
         // soundtrack dead at its first silence.
-        el.addEventListener('ended', () => {
+        deck.el.addEventListener('playing', () => {
+          const cb = this.firstNote;
+          if (cb) {
+            this.firstNote = null;
+            cb();
+          }
+        });
+        deck.el.addEventListener('ended', () => {
           if (this.decks[this.live] === deck) this.advance(true);
         });
-        el.addEventListener('error', () => {
+        deck.el.addEventListener('error', () => {
           if (this.decks[this.live] !== deck) return;
           if (++this.failures <= MAX_FAILURES) this.advance(true);
           else this.playing = false;
         });
-        this.decks.push(deck);
       }
       this.ctx = ctx;
       return true;
     } catch {
-      // Autoplay policy, a missing MediaElementSource, a file:// origin — all
-      // of them mean "no recorded music", never "no game".
+      // A missing MediaElementSource, a file:// origin — either means "no
+      // recorded music", never "no game".
       this.ctx = null;
       this.decks = [];
       return false;
@@ -179,9 +235,12 @@ export class Music {
   start() {
     if (!this.ctx || this.playing || this.decks.length < 2) return;
     const deck = this.decks[this.live];
-    deck.track = this.take();
-    deck.el.src = src(deck.track.file);
-    deck.gain.gain.setValueAtTime(1, this.ctx.currentTime);
+    // `prime` already chose this track and started buffering it at page load.
+    if (!deck.track) {
+      deck.track = this.take();
+      deck.el.src = src(deck.track.file);
+    }
+    deck.gain?.gain.setValueAtTime(1, this.ctx.currentTime);
     void deck.el
       .play()
       .then(() => {
@@ -218,6 +277,7 @@ export class Music {
     const from = this.decks[this.live];
     const to = this.decks[1 - this.live];
     const now = ctx.currentTime;
+    if (!from.gain || !to.gain) return;
 
     to.track = this.take();
     to.el.src = src(to.track.file);

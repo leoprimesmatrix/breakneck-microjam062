@@ -121,6 +121,17 @@ export class Game {
   /** Seconds since the title screen appeared, for staging its entrance. */
   titleTime = 0;
 
+  /** False until the cold open has fired; the game sits in standby until then. */
+  armed = false;
+  /** True between the first gesture and the first note. Usually one frame. */
+  arming = false;
+  /** Seconds spent waiting for that first note, so a stalled fetch cannot hang. */
+  private armTime = 0;
+  /** Seconds on the standby screen, for its own quiet animation. */
+  standbyTime = 0;
+  /** Swallows the igniting gesture so it cannot also start the run. */
+  private armGate = false;
+
   score = 0;
   combo = 1;
   comboTimer = 0;
@@ -184,12 +195,56 @@ export class Game {
     this.runs = this.load(RUNS_KEY);
     this.player.reset();
     this.beginAttract();
+    // The cold open does *not* fire here. See `arm`.
+  }
 
-    // The world behind the title takes the hit too. The screen-space flash lives
-    // in `screens.ts` because the title is drawn after the world is composited —
-    // but shake, lens punch and a hard chromatic fringe all belong to the scene
-    // buffer, and firing them here is what makes the arena *lurch* under the
-    // wordmark instead of sitting there politely while it lands.
+  /**
+   * The player's first gesture.
+   *
+   * The title's cold open is a flashbulb, and it is written to be the moment
+   * the soundtrack kicks in. A browser will not let a page make a sound until
+   * someone has interacted with it, so firing the bang on page load meant it
+   * always went off in silence and the music joined some seconds later,
+   * wherever the player happened to click — two events that should have been
+   * one. So the bang waits for the gesture instead of racing it: the room idles
+   * in the dark until this is called, and then detonates on the downbeat.
+   *
+   * This only *requests* the music. `ignite` is what fires, once the audio is
+   * genuinely audible — see `stepTitle`.
+   */
+  arm() {
+    if (this.armed || this.arming) return;
+    this.arming = true;
+    this.armTime = 0;
+    this.audio.ensure();
+    // Nothing to wait for on a machine that cannot make sound at all.
+    if (!this.audio.ready) {
+      this.ignite();
+      return;
+    }
+    // Off the event rather than the frame poll in `stepTitle`, which stays as a
+    // backstop: a frame of slack here is a frame of the flash landing late.
+    this.audio.tracks.onFirstNote(() => this.ignite());
+  }
+
+  /**
+   * Detonate the title. Called on the frame the first note actually sounds.
+   *
+   * The screen-space flash lives in `screens.ts` because the title is drawn
+   * after the world is composited — but shake, lens punch and a hard chromatic
+   * fringe all belong to the scene buffer, and firing them here is what makes
+   * the arena *lurch* under the wordmark instead of sitting there politely
+   * while it lands.
+   */
+  private ignite() {
+    if (this.armed) return;
+    this.armed = true;
+    this.arming = false;
+    this.armGate = true;
+    this.titleTime = 0;
+    // Re-seed the room so the attract show starts with the music rather than
+    // halfway through a drift it began during standby.
+    this.beginAttract();
     this.juice.addShake(30);
     this.juice.addPunch(0.22);
     this.juice.addFringe(1.8);
@@ -353,7 +408,42 @@ export class Game {
     else this.stepDead(dtReal);
   }
 
+  /**
+   * How long to wait for the first note before giving up and firing anyway.
+   *
+   * The track is buffered from page load, so in practice this is reached only
+   * when the network has stalled or the browser has refused playback outright.
+   * A player staring at a dead screen is a worse failure than a bang without
+   * music, so the wait is short.
+   */
+  private static readonly ARM_TIMEOUT = 0.9;
+
   private stepTitle(dtReal: number) {
+    // Standby: the room idles in the dark until the player's first gesture,
+    // because that gesture is the earliest instant a browser will let the
+    // soundtrack start. See `arm`.
+    if (!this.armed) {
+      this.standbyTime += dtReal;
+      // A slow drift, not a freeze: a completely static first frame reads as a
+      // game that has crashed before it started.
+      const dt = dtReal * 0.25;
+      this.swarm.targetX = view.arenaW * 0.5 + Math.cos(this.clock * 0.22) * 240;
+      this.swarm.targetY = view.arenaH * 0.5 + Math.sin(this.clock * 0.17) * 150;
+      this.swarm.update(dt);
+      this.particles.update(dt);
+
+      if (this.arming) {
+        this.armTime += dtReal;
+        if (this.audio.tracks.audible || this.armTime > Game.ARM_TIMEOUT) this.ignite();
+      }
+
+      // Drain input, or the gesture that armed the game would also be read as
+      // the one that starts the run and the title would never be seen.
+      this.input.takeConfirm();
+      this.input.takeRelease();
+      return;
+    }
+
     this.titleTime += dtReal;
     const dt = dtReal * 0.6;
     this.swarm.targetX = view.arenaW * 0.5 + Math.cos(this.clock * 0.4) * 260;
@@ -370,7 +460,19 @@ export class Game {
       this.ghostStrike();
     }
 
-    if (this.titleTime > 0.5 && this.input.takeConfirm()) this.start();
+    // The gesture that ignited the title is still sitting in the input buffer:
+    // it was pressed during standby, but it is released a frame or two *after*
+    // the cold open fires, so it latches a confirm that nothing has consumed.
+    // Left alone, the single click that lights the screen also skips straight
+    // past it and the title is never seen. Swallow that gesture, and keep
+    // swallowing until it is actually let go — otherwise holding the button
+    // down through the cold open skips it too.
+    if (this.armGate) {
+      this.input.takeConfirm();
+      if (!this.input.holding) this.armGate = false;
+    } else if (this.titleTime > 0.5 && this.input.takeConfirm()) {
+      this.start();
+    }
     this.input.takeRelease();
   }
 

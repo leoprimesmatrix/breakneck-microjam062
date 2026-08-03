@@ -135,8 +135,88 @@ function drawNowPlaying(
   ctx.restore();
 }
 
+// ----------------------------------------------------------------- standby
+/**
+ * Everything before the player's first gesture.
+ *
+ * The title's cold open is a flashbulb written to land on the soundtrack's
+ * first beat, and a browser will not let a page make a sound until someone has
+ * interacted with it — so the bang waits here rather than going off in silence
+ * on load. See `Game.arm`.
+ *
+ * The screen earns its keep rather than merely stalling. It is the one place
+ * in the game where "turn your sound on" can be said to somebody who has not
+ * started playing yet, which for a jam entry is worth more than the second it
+ * costs: most players never hear a browser game's audio at all. And it makes
+ * the bang land harder — the room is held at almost black right up until the
+ * frame it ignites.
+ */
+function drawStandby(ctx: CanvasRenderingContext2D, game: Game) {
+  const S = clamp(view.h / 860, 0.6, 1.5);
+  const cx = view.w * 0.5;
+  const cy = view.h * 0.48;
+  const t = game.standbyTime;
+
+  // Held dark from the first frame rather than faded down into it. Watching the
+  // room dim *before* being asked to click reads as something going wrong, and
+  // the darker this screen sits the further the cold open has to travel when it
+  // finally goes off.
+  scrim(ctx, 0.94);
+
+  // Everything fades up together, a beat after the room has gone dark, so the
+  // screen does not arrive already fully formed on the first frame.
+  ctx.save();
+  ctx.globalAlpha = stage(t, 0.25, 0.7);
+
+  drawUI(ctx, 'AFTERBURN', cx, cy - 42 * S, {
+    size: 12 * S,
+    weight: 700,
+    tracking: 9 * S,
+    align: 'center',
+    color: rgba(COL.dim, 0.9),
+    maxWidth: view.w * 0.9,
+  });
+
+  const rw = Math.min(200 * S, view.w * 0.5);
+  ctx.fillStyle = rgba(COL.wall, 0.5);
+  ctx.fillRect(cx - rw * 0.5, cy - 28 * S, rw, 1 * S);
+
+  // The prompt breathes; while the first note is being waited on it holds
+  // steady instead, so the screen visibly acknowledges the click even on the
+  // rare occasion the wait is long enough to see.
+  const waiting = game.arming;
+  const pulse = waiting ? 0.85 : 0.6 + 0.4 * Math.sin(game.clock * 3.2);
+  const prompt = waiting ? 'STAND BY' : IS_TOUCH ? 'TAP TO IGNITE' : 'CLICK TO IGNITE';
+  ctx.save();
+  ctx.globalAlpha *= pulse;
+  drawVec(ctx, prompt, cx, cy + 14 * S, {
+    size: fitVec(prompt, view.w * 0.8, 40 * S, 0.2),
+    weight: 0.12,
+    tracking: 0.2,
+    align: 'center',
+    baseline: 'mid',
+    color: rgba(COL.ink, 1),
+    glow: 1.2,
+    glowColor: rgba(COL.strike, 1),
+    slant: 0.08,
+  });
+  ctx.restore();
+
+  // Clear of the prompt's glow, not just of its glyphs.
+  drawUI(ctx, 'HEADPHONES ON  ·  THIS ONE HAS A SOUNDTRACK', cx, cy + 68 * S, {
+    size: 10 * S,
+    weight: 600,
+    tracking: 3 * S,
+    align: 'center',
+    color: rgba(COL.focus, 0.7),
+    maxWidth: view.w * 0.92,
+  });
+
+  ctx.restore();
+}
+
 export function drawScreens(ctx: CanvasRenderingContext2D, game: Game) {
-  if (game.state === 'title') drawTitle(ctx, game);
+  if (game.state === 'title') (game.armed ? drawTitle : drawStandby)(ctx, game);
   else if (game.state === 'paused') drawPause(ctx, game);
   else if (game.state === 'dead') drawResults(ctx, game);
 }

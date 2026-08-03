@@ -73,8 +73,13 @@ function resize() {
 addEventListener('resize', resize);
 
 // Browsers start every AudioContext suspended; it can only be created or
-// resumed inside a real user gesture, so hang it off the first one we see.
-const unlock = () => game.audio.ensure();
+// resumed inside a real user gesture, so hang it off the first one we see. That
+// first gesture is also what detonates the title — `Game.arm` explains why the
+// cold open waits for it rather than firing on load.
+const unlock = () => {
+  game.audio.ensure(); // idempotent, and resumes a context suspended by a tab switch
+  game.arm();
+};
 addEventListener('keydown', unlock);
 addEventListener('pointerdown', unlock);
 

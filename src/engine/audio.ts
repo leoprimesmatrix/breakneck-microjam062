@@ -73,6 +73,11 @@ export class Audio {
     return this.muted;
   }
 
+  /** Whether an AudioContext exists at all. False means this machine gets no sound. */
+  get ready() {
+    return this.ctx !== null;
+  }
+
   /** Must be called from a user gesture; safe to call repeatedly. */
   ensure() {
     if (this.ctx) {
