@@ -62,7 +62,10 @@ export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   drawOrbs(ctx, game);
   if (game.aim && game.state === 'play') drawAim(ctx, game, game.aim);
   game.particles.draw(ctx);
-  drawPlayer(ctx, game);
+  // Before ignition there is no ship. The cold open flies it in as the title's
+  // emblem; a hull already parked in the dark room both spoils that arrival
+  // and bleeds through the scrim into the CLICK TO IGNITE prompt.
+  if (game.state !== 'title' || game.armed) drawPlayer(ctx, game);
   ctx.restore();
 
   drawFrame(ctx, game);
