@@ -1,15 +1,22 @@
 import type { EnemyKind } from '../game/enemies';
+import { Music } from './music';
 
 /**
- * Fully procedural WebAudio. No asset files, no licensing, no load time.
+ * Every sound effect in this game is synthesised: no samples, no licensing, no
+ * load time. The soundtrack is the one exception — ten recorded tracks, played
+ * by `Music` as a shuffled bag (see there for why).
  *
- * The one idea worth knowing: when the player holds to aim, the *music* enters
- * bullet time with them — the sequencer halves its tempo, every voice drops a
- * clean octave, and a low-pass closes over the whole bus. Because the notes are
- * synthesised rather than sampled, that transposition stays perfectly in key, so
- * slow motion sounds like the track shifting gear rather than like a tape being
- * dragged. That single effect does more for the feel of the mechanic than any
- * amount of on-screen vignette.
+ * The idea worth knowing is what happens when the player holds to aim. The
+ * music enters bullet time with them: a low-pass closes over the whole music
+ * bus and a sub drone swells underneath it, so slow motion *sounds* slow. What
+ * deliberately does **not** happen is a playback-rate change — dragging a
+ * recorded track down in speed is the sound of a tape stalling, and it would
+ * undo in one gesture everything the rest of the mix is doing.
+ *
+ * The recorded tracks and the fallback sequencer get separate filters. They
+ * want different corners: the synthesised bus is written for a deliberately
+ * warm 6 kHz ceiling, and applying that to a mastered stereo track would just
+ * sound like a blanket over the speakers.
  */
 
 const MINOR = [0, 2, 3, 5, 7, 8, 10];
@@ -28,12 +35,20 @@ const KIND_WAVE: Record<EnemyKind, OscillatorType> = {
   spine: 'square',
 };
 
+/** Music bus level while a run is live, and while it is not. */
+const TRACK_GAIN = 0.62;
+const TRACK_GAIN_IDLE = 0.5;
+
 export class Audio {
+  readonly tracks = new Music();
+
   private ctx: AudioContext | null = null;
   private master!: GainNode;
   private sfx!: GainNode;
   private music!: GainNode;
   private musicFilter!: BiquadFilterNode;
+  private trackBus!: GainNode;
+  private trackFilter!: BiquadFilterNode;
   private noise!: AudioBuffer;
 
   private droneGain: GainNode | null = null;
@@ -41,6 +56,8 @@ export class Audio {
 
   private muted = false;
   private running = false;
+  /** Whether the sequencer has already stood down for a recorded track. */
+  private sequencerYielded = false;
   private dilation = 1;
   private combo = 1;
   private danger = false;
@@ -86,6 +103,18 @@ export class Audio {
       this.music.gain.value = 0;
       this.music.connect(this.musicFilter).connect(this.master);
 
+      // Recorded music, on its own filter — see the note at the top of the file.
+      this.trackFilter = ctx.createBiquadFilter();
+      this.trackFilter.type = 'lowpass';
+      this.trackFilter.frequency.value = 20000;
+      this.trackFilter.Q.value = 0.7;
+
+      this.trackBus = ctx.createGain();
+      this.trackBus.gain.value = this.running ? TRACK_GAIN : TRACK_GAIN_IDLE;
+      this.trackBus.connect(this.trackFilter).connect(this.master);
+
+      if (this.tracks.attach(ctx, this.trackBus)) this.tracks.start();
+
       const len = Math.floor(ctx.sampleRate * 2);
       const buf = ctx.createBuffer(1, len, ctx.sampleRate);
       const data = buf.getChannelData(0);
@@ -112,8 +141,21 @@ export class Audio {
   setRunning(on: boolean) {
     this.running = on;
     if (!this.ctx) return;
-    this.music.gain.setTargetAtTime(on ? 0.42 : 0.0, this.ctx.currentTime, 0.2);
-    if (!on) this.setAlarm(false);
+    const t = this.ctx.currentTime;
+    // The sequencer is a fallback, not a second layer: it plays only when there
+    // is no recorded track to play instead.
+    this.music.gain.setTargetAtTime(on && !this.tracks.active ? 0.42 : 0.0, t, 0.2);
+    // Recorded music keeps going through the title, the pause and the results
+    // screen — a soundtrack that cuts out the moment you die makes the results
+    // screen feel like a crash. It only steps back a little.
+    this.trackBus.gain.setTargetAtTime(on ? TRACK_GAIN : TRACK_GAIN_IDLE, t, 0.3);
+    // `setIntensity` stops being called the instant a run ends, so a player who
+    // dies mid-aim would be left listening through the bullet-time low-pass for
+    // as long as the results screen is up. Open it here rather than there.
+    if (!on) {
+      this.trackFilter.frequency.setTargetAtTime(20000, t, 0.25);
+      this.setAlarm(false);
+    }
   }
 
   /**
@@ -130,6 +172,10 @@ export class Audio {
     const slow = timeScale < 0.45;
 
     this.musicFilter.frequency.setTargetAtTime(slow ? 620 : 2400 + speed * 4200, t, 0.09);
+    // Same gesture on the recorded bus, but from wide open rather than from a
+    // warm ceiling: the drop has to be audible without the normal state sounding
+    // muffled. 700 Hz is roughly "heard through the hull".
+    this.trackFilter.frequency.setTargetAtTime(slow ? 700 : 20000, t, 0.09);
     if (this.droneGain) {
       this.droneGain.gain.setTargetAtTime(slow ? 0.11 : 0.0, t, 0.12);
     }
@@ -369,10 +415,31 @@ export class Audio {
   }
 
   // ------------------------------------------------------------------- music
-  /** Lookahead scheduler; called every frame against the audio clock. */
+  /**
+   * Called every frame. Advances the recorded soundtrack, then runs the
+   * sequencer's lookahead scheduler if there is no recorded track to defer to.
+   *
+   * The track side runs even while muted: a crossfade that stops halfway
+   * because someone pressed M would come back wrong when they pressed it again.
+   */
   tick() {
-    if (!this.enabled || !this.running) return;
-    const ctx = this.ctx!;
+    if (!this.ctx) return;
+    this.tracks.tick();
+
+    // Recorded music arrives asynchronously — `play()` is a promise, and on a
+    // cold cache it can resolve a second or two after the run has started. Ramp
+    // the sequencer out at whatever moment that turns out to be.
+    if (this.tracks.active !== this.sequencerYielded) {
+      this.sequencerYielded = this.tracks.active;
+      this.music.gain.setTargetAtTime(
+        this.running && !this.sequencerYielded ? 0.42 : 0,
+        this.ctx.currentTime,
+        0.2,
+      );
+    }
+
+    if (!this.enabled || !this.running || this.tracks.active) return;
+    const ctx = this.ctx;
     const slow = this.dilation < 0.45;
     const bpm = slow ? 66 : 132;
     const stepDur = 60 / bpm / 4; // sixteenths

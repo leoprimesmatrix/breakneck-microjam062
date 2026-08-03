@@ -82,6 +82,59 @@ function drawSocials(ctx: CanvasRenderingContext2D, cx: number, y: number, S: nu
   ctx.restore();
 }
 
+// -------------------------------------------------------------- now playing
+/**
+ * The soundtrack readout.
+ *
+ * It appears on the title and pause screens and nowhere else. During a run the
+ * HUD already owns both gutters — hull and score along the top, focus and chain
+ * along the bottom, hints through the middle of the lower edge — and a plate
+ * that has to dodge the focus bar on one window shape and the chain counter on
+ * another is a plate that lands on top of one of them eventually. The two
+ * moments a player is actually reading the screen are the two it shows up on.
+ *
+ * The meter bars are the only moving part, and they stop when the game is
+ * muted, so the readout never claims to be playing something you cannot hear.
+ */
+function drawNowPlaying(
+  ctx: CanvasRenderingContext2D,
+  game: Game,
+  x: number,
+  y: number,
+  S: number,
+  centred: boolean,
+  alpha: number,
+) {
+  const name = game.audio.tracks.nowPlaying;
+  if (!name || alpha <= 0.002) return;
+
+  const st = { size: 9.5 * S, weight: 600, tracking: 2.4 * S } as const;
+  const text = `NOW PLAYING  ·  ${name}`;
+  const barW = 1.7 * S;
+  const barGap = 1.6 * S;
+  const meterW = barW * 3 + barGap * 2;
+  const gap = 8 * S;
+  const total = meterW + gap + uiWidth(ctx, text, st);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(centred ? x - total * 0.5 : x, y);
+
+  // Three bars on offset phases. Held at a floor rather than allowed to reach
+  // zero: a bar that vanishes reads as a gap in a dotted line, not as a meter.
+  const live = !game.audio.isMuted;
+  ctx.fillStyle = rgba(COL.focus, 0.7);
+  const h = 9 * S;
+  for (let i = 0; i < 3; i++) {
+    const p = live ? 0.5 + 0.5 * Math.sin(game.clock * (5.1 + i * 1.7) + i * 2.1) : 0.35;
+    const bh = h * (0.28 + 0.72 * p);
+    ctx.fillRect(i * (barW + barGap), -bh, barW, bh);
+  }
+
+  drawUI(ctx, text, meterW + gap, 0, { ...st, color: rgba(COL.dim, 0.85) });
+  ctx.restore();
+}
+
 export function drawScreens(ctx: CanvasRenderingContext2D, game: Game) {
   if (game.state === 'title') drawTitle(ctx, game);
   else if (game.state === 'paused') drawPause(ctx, game);
@@ -572,6 +625,10 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
   //     way a colophon grounds a book; its job is to be almost unnoticed. The
   //     handles sit one step above the jam plate — quiet, but findable by
   //     anyone who liked the game enough to read the bottom of the screen.
+  // Top-left corner: the only part of the title screen nothing else reaches,
+  // since the lockup is centred and the colophon is along the bottom edge.
+  drawNowPlaying(ctx, game, 22 * S, 28 * S, S, false, stage(t, SHIP_LAND + 1.2, 0.8) * 0.8);
+
   drawSocials(ctx, cx, view.h - 38 * S, S, stage(t, SHIP_LAND + 1.05, 0.7) * 0.85);
   ctx.save();
   ctx.globalAlpha = stage(t, SHIP_LAND + 1.15, 0.7) * 0.55;
@@ -669,18 +726,19 @@ function drawPause(ctx: CanvasRenderingContext2D, game: Game) {
   // The codex. The rule cards fly past mid-fight and there is no other way back
   // to them; a paused player asking "what was the magenta one?" deserves an
   // answer that is not a second death.
-  if (!kinds.length) return;
   const rowH = 46 * S;
   const listW = Math.min(470 * S, view.w * 0.92);
   const x = cx - listW * 0.5;
   const y0 = top + 92 * S;
 
-  drawUI(ctx, 'CONTACTS', x, y0, {
-    size: 10 * S,
-    weight: 700,
-    tracking: 3.4 * S,
-    color: rgba(COL.dim, 0.75),
-  });
+  if (kinds.length) {
+    drawUI(ctx, 'CONTACTS', x, y0, {
+      size: 10 * S,
+      weight: 700,
+      tracking: 3.4 * S,
+      color: rgba(COL.dim, 0.75),
+    });
+  }
 
   for (let i = 0; i < kinds.length; i++) {
     const spec = SPECS[kinds[i]];
@@ -712,6 +770,12 @@ function drawPause(ctx: CanvasRenderingContext2D, game: Game) {
       maxWidth: listW - 74 * S,
     });
   }
+
+  // Hung off the bottom of the codex rather than off the bottom of the screen.
+  // The pause overlay sits on top of a live HUD, and the screen's lower edge
+  // already belongs to the focus bar and its hint.
+  const listEnd = kinds.length ? y0 + 22 * S + kinds.length * rowH : top + 84 * S;
+  drawNowPlaying(ctx, game, cx, listEnd + 26 * S, S, true, 0.75);
 }
 
 // ------------------------------------------------------------------- results

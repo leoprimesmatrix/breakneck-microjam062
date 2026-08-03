@@ -46,7 +46,8 @@ tempo, never a hull point you did not see coming.
 npm install && npm run dev
 ```
 
-Production build — one self-contained `dist/index.html`, ~27 kB gzipped:
+Production build — a self-contained `dist/index.html` (~38 kB gzipped) beside
+`dist/music/`, the ten soundtrack files:
 
 ```bash
 npm run build
@@ -80,7 +81,8 @@ src/
     input.ts       polled mouse / keyboard / touch
     juice.ts       hitstop, shake, flash, lens punch
     particles.ts   fixed-capacity additive pool
-    audio.ts       procedural WebAudio, incl. the bullet-time music warp
+    audio.ts       procedural WebAudio for every effect, plus the music bus
+    music.ts       the soundtrack: shuffled bag, two decks, crossfade
   game/
     strike.ts      the solver — runs the preview and the strike itself
     enemies.ts     five behaviours, one shared pool
@@ -119,5 +121,8 @@ Three details worth knowing:
 
 ## Credits
 
-Built by Leonardo Diaz for Micro Jam 062. Everything — art, typeface, music,
-sound — is generated at runtime from code in this repository.
+Built by Leonardo Diaz for Micro Jam 062. The art, the typeface and every
+sound effect are generated at runtime from code in this repository; the ten
+soundtrack files in `public/music/` are the one thing loaded rather than
+computed. A fallback sequencer in `audio.ts` still plays if they cannot be
+fetched, so the game is never silent.

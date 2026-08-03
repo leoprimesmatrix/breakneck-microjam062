@@ -19,8 +19,11 @@ bottom. Copy each block into its field.
 
 ## Uploads
 
-- **`AFTERBURN-web.zip`** (37 KB) — check **"This file will be played in the browser"**.
-  The whole game is one 111 KB `index.html`; nothing else to upload.
+- **`AFTERBURN-web.zip`** (22 MB) — check **"This file will be played in the browser"**.
+  Inside: `index.html` at the root (the entire game — code, art, typeface, all
+  sound effects) plus `music/` with the ten soundtrack tracks. Nothing else to
+  upload. The music streams on demand, so the game is playable immediately;
+  the zip's size is not a startup cost.
 
 ## Embed options
 
@@ -63,12 +66,21 @@ WASD nudges your drift · M mutes · P pauses (with a codex of everything that's
 
 ### Under the hood
 
-- Hand-built in **vanilla TypeScript + Canvas2D** — no engine, no assets. The entire game (code, art, bloom pipeline, music) ships as **one 111 KB HTML file**.
-- All audio is **synthesized at runtime** — the soundtrack is code.
+- Hand-built in **vanilla TypeScript + Canvas2D** — no engine, no sprites, no font files. The entire game — art, typeface, bloom pipeline and every sound effect — is **one 116 KB HTML file** that draws and synthesizes all of it at runtime.
+- **Ten original tracks**, shuffled so nothing repeats until you have heard them all. Hold to aim and a low-pass closes over the music with you — slow motion you can hear.
 - Real post-processing: bloom, chromatic aberration, film grain, adaptive quality that keeps 60fps on weak hardware.
 - Persistent best score, ranks, and a strike-by-strike combo system built to be chased.
 
 Made solo in a week for **Micro Jam 062** (theme: **SPEED**). Built with AI assistance (Claude) — disclosed under itch's AI generation policy.
+
+### Soundtrack
+
+Ten tracks, played as a shuffled bag — nothing repeats until you have heard the
+other nine, and which one opens the title screen is different every time you
+load the game. They crossfade into each other, so the music never stops.
+
+`IGNITION` · `REDLINE` · `COLDSTART` · `SLIPSTREAM` · `OVERPRESSURE` ·
+`FLASHPOINT` · `KILL LINE` · `TERMINAL VELOCITY` · `BLACKOUT` · `LAST LIGHT`
 
 ### Follow the dev
 
@@ -84,8 +96,8 @@ A follow genuinely helps more than you'd think. Tell me your best rank — mine'
 | Field | Value |
 |---|---|
 | **Genre** | Action |
-| **Tags** (10 max) | `arcade`, `fast-paced`, `score-attack`, `top-down`, `singleplayer`, `2d`, `neon`, `minimalist`, `html5`, `short` |
-| **AI generation disclosure** | **Yes** — code & art made with AI assistance (Claude). Being upfront here costs nothing and protects the entry. |
+| **Tags** (10 max) | `arcade`, `fast-paced`, `score-attack`, `top-down`, `singleplayer`, `2d`, `neon`, `soundtrack`, `html5`, `short` |
+| **AI generation disclosure** | **Yes** — code and art made with AI assistance (Claude); the ten soundtrack tracks are AI-generated. Tick every category that applies. Over-disclosing costs nothing; under-disclosing can get an entry pulled after the votes are in. |
 | **Custom noun** | arena strike game |
 | **Community** | Comments enabled |
 
@@ -99,8 +111,10 @@ A follow genuinely helps more than you'd think. Tell me your best rank — mine'
 
 ## Images
 
-- **Cover image**: `thumbnail.png` (1260×1000 — itch's 630×500 slot at 2×, stays crisp on retina)
-- **Screenshots**, in this order (first one shows beside the cover most often):
+All four are under itch's 3 MB per-image limit, with room to spare.
+
+- **Cover image**: `thumbnail.png` (1260×1000, 1.4 MB — itch's 630×500 slot at 2×, stays crisp on retina)
+- **Screenshots** (1600×900, 1.2–1.9 MB each), in this order — the first shows beside the cover most often:
   1. `shot-2-strike.png` — mid-strike, blade out, seeder contact card up
   2. `shot-1-title.png` — the title screen after the cold open
   3. `shot-3-aftermath.png` — scarred floor, lancer mid-charge

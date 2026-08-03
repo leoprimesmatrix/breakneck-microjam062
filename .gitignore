@@ -6,3 +6,10 @@ dist/
 promo/shot-*.png
 promo/thumbnail.png
 promo/AFTERBURN-web.zip
+
+# The soundtrack masters as delivered. `public/music/` holds the levelled,
+# renamed copies the game actually ships; these are the originals and are
+# 29 MB of duplicate audio.
+/*.mp3
+# Full-resolution screenshot masters; promo/ holds the resized uploads.
+promo/full/
