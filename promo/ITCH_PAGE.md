@@ -114,12 +114,17 @@ A follow genuinely helps more than you'd think. Tell me your best rank — mine'
 
 All five are under itch's 3 MB per-image limit.
 
-- **Cover image**: **`cover.gif`** (630×500, 2.5 MB, ~3.4 s loop) — real gameplay:
-  the aim line sweeps onto three enemies in slow-mo, the strike tears through
-  all three, TRIPLE +600, smash cut to the wordmark. Use THIS as the cover —
-  in a grid of ~87 static covers, the one that moves gets the click.
+- **Cover image**: **`cover.gif`** (630×500, 1.5 MB, 3.7 s loop) — real gameplay
+  for the first half, the key art for the second: the aim line sweeps onto three
+  enemies in slow motion, the strike tears through all three, TRIPLE +600, one
+  frame of blown-out white, and then it lands on `thumbnail.png` itself and
+  **holds there for 1.75 s** — nearly half the loop is the wordmark, so a viewer
+  who glances at any moment sees either the game being played or the name of it.
+  Use THIS as the cover — in a grid of ~87 static covers, the one that moves
+  gets the click.
 - **Fallback / social image**: `thumbnail.png` (1260×1000, 1.4 MB — if the GIF
-  is ever rejected, and for X/IG posts, which don't animate GIFs from itch links)
+  is ever rejected, and for X/IG posts, which don't animate GIFs from itch links.
+  It is the same image the GIF ends on, so the two are one lockup.)
 - **Screenshots** (1600×900, 1.2–1.9 MB each), in this order — the first shows beside the cover most often:
   1. `shot-2-strike.png` — mid-strike, blade out, seeder contact card up
   2. `shot-1-title.png` — the title screen after the cold open
