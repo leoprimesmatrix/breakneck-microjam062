@@ -85,7 +85,8 @@ export class Music {
   private failures = 0;
   private fadeEndsAt = 0;
   private playing = false;
-  private firstNote: (() => void) | null = null;
+  /** More than one thing waits on the downbeat; see `onFirstNote`. */
+  private firstNote: (() => void)[] = [];
 
   constructor() {
     this.reshuffle();
@@ -113,14 +114,15 @@ export class Music {
   /**
    * Run `cb` the instant the first track becomes audible.
    *
-   * The title's cold open hangs off this. Polling `audible` from the frame loop
-   * would have been simpler, but it costs up to a frame of slack, and a
-   * flashbulb that lands after its own downbeat is exactly the thing this is
-   * meant to fix. The `playing` event is the earliest signal the platform gives.
+   * The title's cold open and the music's own fade-in both hang off this.
+   * Polling `audible` from the frame loop would have been simpler, but it costs
+   * up to a frame of slack, and a flashbulb that lands after its own downbeat
+   * is exactly the thing this is meant to fix. The `playing` event is the
+   * earliest signal the platform gives.
    */
   onFirstNote(cb: () => void) {
     if (this.audible) cb();
-    else this.firstNote = cb;
+    else this.firstNote.push(cb);
   }
 
   /**
@@ -205,11 +207,10 @@ export class Music {
         // request, a browser that will not report it) would otherwise stop the
         // soundtrack dead at its first silence.
         deck.el.addEventListener('playing', () => {
-          const cb = this.firstNote;
-          if (cb) {
-            this.firstNote = null;
-            cb();
-          }
+          const waiting = this.firstNote;
+          if (!waiting.length) return;
+          this.firstNote = [];
+          for (const cb of waiting) cb();
         });
         deck.el.addEventListener('ended', () => {
           if (this.decks[this.live] === deck) this.advance(true);

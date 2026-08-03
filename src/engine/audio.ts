@@ -39,6 +39,23 @@ const KIND_WAVE: Record<EnemyKind, OscillatorType> = {
 const TRACK_GAIN = 0.62;
 const TRACK_GAIN_IDLE = 0.5;
 
+/**
+ * Time constant of the soundtrack's swell into the title.
+ *
+ * An exponential approach rather than a hard start: at full level from sample
+ * one the music arrives as a slam, which startles rather than lands. This
+ * reaches roughly two-thirds of level in one time constant and is effectively
+ * full at three — so with 0.45 it is up to ~95% by 1.35 s, which is the beat
+ * the wordmark comes to rest on (`SHIP_LAND` in `screens.ts`). The track still
+ * *starts* on the flash, so the cold open keeps its sync; it just rises into
+ * the title instead of shouting over it.
+ *
+ * A time constant, not a scheduled ramp, specifically so the run-start and
+ * pause ducks in `setRunning` can interrupt it mid-swell without either
+ * fighting a queued automation curve or jumping.
+ */
+const TRACK_RISE = 0.45;
+
 export class Audio {
   readonly tracks = new Music();
 
@@ -115,10 +132,14 @@ export class Audio {
       this.trackFilter.Q.value = 0.7;
 
       this.trackBus = ctx.createGain();
-      this.trackBus.gain.value = this.running ? TRACK_GAIN : TRACK_GAIN_IDLE;
+      // Silent until the first note, then swelled up by `riseMusic`.
+      this.trackBus.gain.value = 0;
       this.trackBus.connect(this.trackFilter).connect(this.master);
 
-      if (this.tracks.attach(ctx, this.trackBus)) this.tracks.start();
+      if (this.tracks.attach(ctx, this.trackBus)) {
+        this.tracks.onFirstNote(() => this.riseMusic());
+        this.tracks.start();
+      }
 
       const len = Math.floor(ctx.sampleRate * 2);
       const buf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -141,6 +162,20 @@ export class Audio {
 
   toggleMute() {
     return this.setMuted(!this.muted);
+  }
+
+  /**
+   * Bring the soundtrack up from silence on the first note. Fired from the
+   * downbeat rather than from the gesture, so the swell and the title's cold
+   * open are the same event. See `TRACK_RISE`.
+   */
+  private riseMusic() {
+    if (!this.ctx) return;
+    this.trackBus.gain.setTargetAtTime(
+      this.running ? TRACK_GAIN : TRACK_GAIN_IDLE,
+      this.ctx.currentTime,
+      TRACK_RISE,
+    );
   }
 
   setRunning(on: boolean) {
