@@ -450,9 +450,37 @@ export class Audio {
     const i = Math.min(chainIndex, 24);
     const deg = PENTA[i % PENTA.length] + 12 * Math.min(3, Math.floor(i / PENTA.length));
     const f = hz(deg + 48);
+    // The chest. The chime above carries the melody of a chain, but everything
+    // it plays sits over 800 Hz — a body being destroyed needs weight under
+    // it, or the most-repeated reward in the game reads as UI feedback.
+    this.tone(hz(12), 'sine', 0.2 + Math.min(0.06, chainIndex * 0.015), 0.11, t, 0.5);
     this.tone(f, KIND_WAVE[kind], 0.16, 0.13, t, 0.86);
     this.tone(f * 2, 'sine', 0.05, 0.07, t);
     this.hiss(t, 0.11, 0.06, 2600 + combo * 60, 'highpass');
+  }
+
+  /**
+   * The aim line acquiring one more target. Pitch climbs with the count, so a
+   * sweep across a pack plays a rising scale. Kept short and quiet: it fires
+   * during slow motion, against the filtered music, and must read as
+   * instrumentation rather than as a reward — the reward is the release.
+   */
+  onLock(count: number) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(hz(52 + Math.min(count, 8) * 2), 'sine', 0.06, 0.06, t, 1.1);
+    this.hiss(t, 0.025, 0.03, 5600, 'highpass');
+  }
+
+  /**
+   * A strike arriving in empty air: the brake-thud. Deliberately the quietest
+   * arrival in the game — a whiff must be *marked*, never rewarded.
+   */
+  onArrive() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(66, 'sine', 0.1, 0.1, t, 0.55);
+    this.hiss(t, 0.05, 0.06, 700, 'lowpass');
   }
 
   onOrbPop() {
@@ -485,8 +513,11 @@ export class Audio {
   onWall() {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
-    this.tone(88, 'sine', 0.16, 0.14, t, 0.5);
-    this.hiss(t, 0.1, 0.08, 900, 'lowpass');
+    // Louder than a kill, softer than a hurt: the wall is a mistake, not a
+    // wound. The old 88 Hz at 0.16 registered below the kill chime, which made
+    // ramming a steel room at full speed feel softer than popping an orb.
+    this.tone(74, 'sine', 0.26, 0.18, t, 0.45);
+    this.hiss(t, 0.14, 0.09, 900, 'lowpass');
   }
 
   onHurt(hullLeft: number) {

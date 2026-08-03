@@ -133,6 +133,9 @@ export class Game {
   private armGate = false;
   /** Same idea as `armGate`, for the results screen. Set in `die`. */
   private deadGate = false;
+  /** Kill count the aim line last announced; see the lock tick in `stepPlay`. */
+  private aimKillsPrev = 0;
+  private lockCooldown = 0;
 
   score = 0;
   combo = 1;
@@ -629,6 +632,25 @@ export class Game {
       this.aim = null;
     }
 
+    // The line acquiring targets is the hold half of the verb, and it used to
+    // be mute. A tick per newly-acquired kill, pitch climbing with the count —
+    // sweeping across a pack plays a rising scale, which is both feedback and
+    // bait. Rising-only, with a small cooldown so a target flickering on the
+    // line's edge cannot zipper.
+    this.lockCooldown = Math.max(0, this.lockCooldown - dtReal);
+    if (this.aiming && this.aim) {
+      const k = this.aim.kills;
+      if (this.lockCooldown <= 0 && k > this.aimKillsPrev) {
+        this.audio.onLock(k);
+        this.aimKillsPrev = k;
+        this.lockCooldown = 0.05;
+      } else if (this.lockCooldown <= 0 && k < this.aimKillsPrev) {
+        this.aimKillsPrev = k;
+      }
+    } else {
+      this.aimKillsPrev = 0;
+    }
+
     // --- commit. A release that lands during the strike cooldown is buffered
     //     rather than dropped: releasing a fraction too early is the single most
     //     common input mistake, and eating the input teaches the player that the
@@ -841,10 +863,17 @@ export class Game {
 
     // Hitstop shrinks as a chain grows: the first kill should land like a
     // hammer, the fifth should feel like the line is simply not stopping.
+    // The first is special-cased because the old curve gave it 44 ms — two and
+    // a half frames, a hiccup — while a *blocked* strike got 100 ms. Failure
+    // must never land harder than success.
     const n = this.player.strikeKills;
-    this.juice.addHitstop(Math.max(0.014, 0.05 - n * 0.006));
-    this.juice.addShake(6 + Math.min(10, n * 1.6));
+    this.juice.addHitstop(n === 1 ? 0.085 : Math.max(0.016, 0.055 - n * 0.006));
+    this.juice.addShake(8 + Math.min(12, n * 2));
     this.juice.addFlash(0.1 + Math.min(0.16, n * 0.03), col);
+    // Each kill tugs the camera along the strike axis. addKick is additive, so
+    // a long chain compounds toward launch strength and the line drags the
+    // whole screen with it.
+    this.juice.addKick(dx, dy, 3.5);
     this.juice.addFringe(0.35);
     this.audio.onKill(e.kind, n, this.combo);
 
@@ -896,9 +925,27 @@ export class Game {
     if (plan) this.addScar(plan.x0, plan.y0, p.x, p.y);
 
     if (plan && plan.hitWall && !plan.blocked) {
+      // A ship at full strike speed meeting a steel wall. The camera slams
+      // into it along the travel direction; the fiction does not permit this
+      // to read softer than popping an orb.
       this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, COL.wall, 12, this.rng);
-      this.juice.addShake(6);
+      this.juice.addHitstop(0.03);
+      this.juice.addShake(11);
+      this.juice.addKick(plan.dx, plan.dy, 9);
+      this.juice.addPunch(0.04);
       this.audio.onWall();
+    } else if (plan && !plan.blocked && n === 0) {
+      // The whiff. A strike that kills nothing and stops mid-air used to end
+      // in total silence — no particles, no shake, no sound, the launch whoosh
+      // just trailing off. The absence of reward is the lesson, but absence of
+      // *arrival* reads as the game not noticing. A soft brake-thud, quieter
+      // than any kill, marks the stop while keeping success louder than
+      // failure.
+      this.particles.spall(p.x, p.y, Math.atan2(plan.dy, plan.dx), COL.strike, 8, this.rng);
+      this.particles.ring(p.x, p.y, COL.strike, 56, 0.26, 2.5);
+      this.juice.addShake(4);
+      this.juice.addKick(plan.dx, plan.dy, 4);
+      this.audio.onArrive();
     }
 
     if (n >= 2) {

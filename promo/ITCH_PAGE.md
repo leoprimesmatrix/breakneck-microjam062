@@ -111,9 +111,14 @@ A follow genuinely helps more than you'd think. Tell me your best rank — mine'
 
 ## Images
 
-All four are under itch's 3 MB per-image limit, with room to spare.
+All five are under itch's 3 MB per-image limit.
 
-- **Cover image**: `thumbnail.png` (1260×1000, 1.4 MB — itch's 630×500 slot at 2×, stays crisp on retina)
+- **Cover image**: **`cover.gif`** (630×500, 2.5 MB, ~3.4 s loop) — real gameplay:
+  the aim line sweeps onto three enemies in slow-mo, the strike tears through
+  all three, TRIPLE +600, smash cut to the wordmark. Use THIS as the cover —
+  in a grid of ~87 static covers, the one that moves gets the click.
+- **Fallback / social image**: `thumbnail.png` (1260×1000, 1.4 MB — if the GIF
+  is ever rejected, and for X/IG posts, which don't animate GIFs from itch links)
 - **Screenshots** (1600×900, 1.2–1.9 MB each), in this order — the first shows beside the cover most often:
   1. `shot-2-strike.png` — mid-strike, blade out, seeder contact card up
   2. `shot-1-title.png` — the title screen after the cold open
