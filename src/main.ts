@@ -90,10 +90,7 @@ addEventListener('keydown', (e) => {
 
 // A tab that loses focus mid-run should not come back to a dead player.
 addEventListener('visibilitychange', () => {
-  if (document.hidden && game.state === 'play') {
-    game.state = 'paused';
-    game.audio.setRunning(false);
-  }
+  if (document.hidden) game.pause();
 });
 
 if (import.meta.env.DEV) {

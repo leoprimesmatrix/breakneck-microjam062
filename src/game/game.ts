@@ -520,11 +520,31 @@ export class Game {
     }
   }
 
+  /**
+   * Enter the pause screen. Also used when the tab loses focus, which is why it
+   * lives here rather than inline in `stepPlay`.
+   */
+  pause() {
+    if (this.state !== 'play') return;
+    this.state = 'paused';
+    // Nothing consumes the confirm edge during a run, so the player's last
+    // strike is still sitting there latched — and `stepPaused` accepts a
+    // confirm as "resume". Left alone, the pause screen appears for exactly one
+    // frame and then dismisses itself. Drain it here, the same way the title
+    // drains the click that ignited it.
+    this.input.takeConfirm();
+    // See `Audio.setPaused` for why the order is this way round here and the
+    // other way round on the way out.
+    this.audio.setPaused(true);
+    this.audio.setRunning(false);
+  }
+
   private stepPaused(dtReal: number) {
     this.player.tick(dtReal * 0.15, false);
     if (this.input.takePause() || this.input.takeConfirm()) {
       this.state = 'play';
       this.audio.setRunning(true);
+      this.audio.setPaused(false);
     }
     this.input.takeRelease();
   }
@@ -548,8 +568,7 @@ export class Game {
     const p = this.player;
 
     if (this.input.takePause()) {
-      this.state = 'paused';
-      this.audio.setRunning(false);
+      this.pause();
       return;
     }
 

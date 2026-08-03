@@ -38,6 +38,46 @@ const KIND_WAVE: Record<EnemyKind, OscillatorType> = {
 /** Music bus level while a run is live, and while it is not. */
 const TRACK_GAIN = 0.62;
 const TRACK_GAIN_IDLE = 0.5;
+/** ...and while the game is paused, a step further back again. */
+const TRACK_GAIN_PAUSED = 0.34;
+
+/**
+ * The pause filter: deeper than bullet time's, and resonant where bullet
+ * time's is flat.
+ *
+ * Pause borrows the gesture the player already knows from holding to aim — the
+ * room closing over the music — but it must not be mistaken for it. So it goes
+ * further down (340 Hz against 700) and, more importantly, sounds different on
+ * the way: lifting Q puts a bump right at the corner, which turns a blanket
+ * over the speakers into a filter audibly *closing*. Bullet time is a held
+ * breath; pause is the hatch sealing.
+ */
+const PAUSE_CORNER = 340;
+const PAUSE_Q = 2.0;
+/** Q while open. Anything above ~0.7 colours the top end for no reason. */
+const OPEN_Q = 0.7;
+/**
+ * How long the hatch takes to shut.
+ *
+ * A *duration*, swept exponentially, rather than the time constant the rest of
+ * this file uses — because pitch is heard in octaves and an approach that is
+ * even in hertz is not even in anything the ear cares about. Measured: easing
+ * 20 kHz towards 340 Hz on a 0.22 s time constant is still sitting at 7.5 kHz
+ * a fifth of a second in, having spent that whole time in the two octaves
+ * nobody can tell apart, and only sounds like it starts moving near the end.
+ * A constant rate in octaves closes at an even, deliberate pace all the way
+ * down, which is the sound the gesture is imitating.
+ */
+const PAUSE_CLOSE = 0.45;
+/**
+ * Opening back up is a time constant again, and deliberately the same one
+ * `setIntensity` uses: the frame after the player un-pauses, `setIntensity`
+ * starts writing this parameter every frame anyway, so matching it means the
+ * two agree instead of overlapping.
+ */
+const PAUSE_OPEN = 0.09;
+/** The sub drone under a paused screen — the engines still turning over. */
+const PAUSE_DRONE = 0.07;
 
 /**
  * Time constant of the soundtrack's swell into the title.
@@ -73,6 +113,7 @@ export class Audio {
 
   private muted = false;
   private running = false;
+  private paused = false;
   /** Whether the sequencer has already stood down for a recorded track. */
   private sequencerYielded = false;
   private dilation = 1;
@@ -188,14 +229,83 @@ export class Audio {
     // Recorded music keeps going through the title, the pause and the results
     // screen — a soundtrack that cuts out the moment you die makes the results
     // screen feel like a crash. It only steps back a little.
-    this.trackBus.gain.setTargetAtTime(on ? TRACK_GAIN : TRACK_GAIN_IDLE, t, 0.3);
+    //
+    // While paused, `setPaused` owns the bus level and the filter; deferring
+    // here is what lets the two be called in either order without one ramping
+    // over the top of the other.
+    this.trackBus.gain.setTargetAtTime(
+      this.paused ? TRACK_GAIN_PAUSED : on ? TRACK_GAIN : TRACK_GAIN_IDLE,
+      t,
+      0.3,
+    );
     // `setIntensity` stops being called the instant a run ends, so a player who
     // dies mid-aim would be left listening through the bullet-time low-pass for
     // as long as the results screen is up. Open it here rather than there.
-    if (!on) {
+    if (!on && !this.paused) {
       this.trackFilter.frequency.setTargetAtTime(20000, t, 0.25);
-      this.setAlarm(false);
     }
+    if (!on) this.setAlarm(false);
+  }
+
+  /**
+   * Seal the room over the music while the game is paused.
+   *
+   * Everything keeps running — the track plays on, the crossfades still land on
+   * time — but it is heard from outside: the low-pass closes, the resonance
+   * blooms at the corner, the bus steps back, and the sub drone comes up
+   * underneath so the silence has a floor rather than a hole. Stopping the
+   * music outright was the alternative, and it makes a pause feel like a crash.
+   *
+   * Call this *before* `setRunning(false)` when pausing and *after*
+   * `setRunning(true)` when resuming, so that in both directions the last word
+   * on each parameter comes from whichever of the two actually knows the answer.
+   */
+  setPaused(on: boolean) {
+    this.paused = on;
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+
+    this.sweep(this.trackFilter.frequency, on ? PAUSE_CORNER : 20000, t, on);
+    // The fallback sequencer gets the same gesture from its own warmer ceiling,
+    // so a player whose tracks failed to load still hears the hatch shut.
+    this.sweep(this.musicFilter.frequency, on ? PAUSE_CORNER : 6000, t, on);
+    this.sweep(this.trackFilter.Q, on ? PAUSE_Q : OPEN_Q, t, on, true);
+    this.trackBus.gain.setTargetAtTime(
+      on ? TRACK_GAIN_PAUSED : this.running ? TRACK_GAIN : TRACK_GAIN_IDLE,
+      t,
+      on ? 0.3 : 0.12,
+    );
+    if (this.droneGain) {
+      // Slower than the filter in both directions: the drone should arrive
+      // after the room has closed and leave before the player notices it went.
+      this.droneGain.gain.setTargetAtTime(on ? PAUSE_DRONE : 0, t, on ? 0.45 : 0.14);
+    }
+    // The hull alarm is a warning, and a warning nobody is playing against is
+    // just noise — so pause silences it. It has to be put back by hand on the
+    // way out: `setIntensity` only fires on a *change* of danger, and coming
+    // back to one hull left is not a change.
+    if (on) this.setAlarm(false);
+    else if (this.danger) this.setAlarm(true);
+  }
+
+  /**
+   * Move a filter parameter into or out of the pause.
+   *
+   * Closing is a scheduled ramp so the sweep has a fixed, even shape; opening
+   * is an approach so that `setIntensity`, which takes this parameter back over
+   * on the very next frame, agrees with it rather than landing on top of a
+   * ramp still in flight. Either way the current value is read and re-anchored
+   * first, which is what makes a pause-and-immediately-unpause pick up from
+   * wherever the sweep had actually reached instead of jumping.
+   */
+  private sweep(p: AudioParam, to: number, t: number, closing: boolean, linear = false) {
+    p.cancelScheduledValues(t);
+    // `exponentialRampToValueAtTime` is undefined through zero, and a filter
+    // corner is never legitimately there anyway.
+    p.setValueAtTime(Math.max(p.value, 0.001), t);
+    if (!closing) p.setTargetAtTime(to, t, PAUSE_OPEN);
+    else if (linear) p.linearRampToValueAtTime(to, t + PAUSE_CLOSE);
+    else p.exponentialRampToValueAtTime(to, t + PAUSE_CLOSE);
   }
 
   /**
