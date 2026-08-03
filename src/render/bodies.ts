@@ -492,6 +492,9 @@ function drawMote(ctx: CanvasRenderingContext2D, p: Pose) {
  * there to bleed. Any small mark that has to read through a bloom pass should be
  * a hole in the light rather than a piece of it.
  */
+/** Strength the seeder's cavity glow is baked at; the pulse is applied on top. */
+const CAVITY = 0.4;
+
 function drawSeeder(ctx: CanvasRenderingContext2D, p: Pose) {
   const r = p.r;
   const swell = 0.5 + 0.5 * Math.sin(p.clock * 2.2 + p.seed);
@@ -509,7 +512,14 @@ function drawSeeder(ctx: CanvasRenderingContext2D, p: Pose) {
   ctx.fill();
   ctx.restore();
   ctx.globalCompositeOperation = 'lighter';
-  drawRadial(ctx, glowSprite(COL.mote, 0.24 + swell * 0.16), 0, 0, r * 0.72, p.alpha);
+  // The pulse rides on alpha; the sprite is baked once at its brightest.
+  //
+  // Passing the animated value as the sprite's own strength put a continuously
+  // varying float into its cache key, so every seeder minted a fresh 128px
+  // canvas on every frame and none of them were ever released. Every stop in
+  // the sprite scales linearly with `inner`, so modulating the whole blit
+  // instead is the same image out of one cache entry. See `radialSprite`.
+  drawRadial(ctx, glowSprite(COL.mote, CAVITY), 0, 0, r * 0.72, (p.alpha * (0.24 + swell * 0.16)) / CAVITY);
   ctx.globalCompositeOperation = 'source-over';
 
   // The brood: three of them, in silhouette against the cavity, turning over.

@@ -172,6 +172,24 @@ export function setGlowTarget(g: Glow) {
 const sprites = new Map<string, HTMLCanvasElement>();
 
 /**
+ * Ceiling on the sprite cache.
+ *
+ * A cache of canvases is the most expensive thing in this renderer to get
+ * wrong, because the backing stores do not live in the JS heap: an unbounded
+ * key space here shows up as the whole machine going treacly, with a heap
+ * profile that stays flat and innocent the entire time, and it outlives a
+ * reload because the memory is the renderer process's rather than the page's.
+ *
+ * It happened: a seeder's cavity glow baked its animated brightness into the
+ * key, so five on screen minted thirty 128px canvases a second — about 1.4 GB a
+ * minute, never released. The rule callers follow is to key on constants and
+ * pulse with `globalAlpha`, which is free and exact. This is the net under that
+ * rule rather than a substitute for it: the honest working set is a couple of
+ * dozen entries, so reaching this bound means something is keying on a float.
+ */
+const MAX_SPRITES = 128;
+
+/**
  * A radial falloff baked once into a bitmap.
  *
  * Enemy halos, the player's aura and the orb glows are the same shape at
@@ -184,6 +202,15 @@ const sprites = new Map<string, HTMLCanvasElement>();
 export function radialSprite(key: string, stops: readonly [number, string][], size = 128) {
   let c = sprites.get(key);
   if (c) return c;
+  if (sprites.size >= MAX_SPRITES) {
+    // Dropping the lot costs one frame of rebaking. Leaking is unbounded, so
+    // this trade is never close.
+    if (import.meta.env.DEV) {
+      console.warn(`radialSprite: cache hit ${MAX_SPRITES} entries and was cleared. ` +
+        `Something is keying on a varying value — newest key was "${key}".`);
+    }
+    sprites.clear();
+  }
   c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
