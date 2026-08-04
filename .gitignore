@@ -1,15 +1,13 @@
-shots/
-node_modules/
-dist/
-*.zip
-.DS_Store
-promo/shot-*.png
-promo/thumbnail.png
-promo/AFTERBURN-web.zip
+# Everything about this game lives in this repository — source, the press kit at
+# full resolution, the soundtrack masters, and the exact build that was submitted
+# to the jam. The only things kept out are the two directories that can be
+# regenerated from what *is* here, plus Finder droppings.
 
-# The soundtrack masters as delivered. `public/music/` holds the levelled,
-# renamed copies the game actually ships; these are the originals and are
-# 29 MB of duplicate audio.
-/*.mp3
-# Full-resolution screenshot masters; promo/ holds the resized uploads.
-promo/full/
+# `npm ci` rebuilds this from the committed package-lock.json.
+node_modules/
+
+# `npm run build` rebuilds this in a second, and promo/AFTERBURN-web.zip is the
+# copy that actually shipped — that one is committed.
+dist/
+
+.DS_Store

@@ -46,12 +46,15 @@ tempo, never a hull point you did not see coming.
 npm install && npm run dev
 ```
 
-Production build — a self-contained `dist/index.html` (~38 kB gzipped) beside
-`dist/music/`, the ten soundtrack files:
+Production build — a self-contained `dist/index.html` (126 kB, 41 kB gzipped)
+beside `dist/music/`, the ten soundtrack files:
 
 ```bash
 npm run build
 ```
+
+`promo/AFTERBURN-web.zip` is that build as it was actually uploaded to itch.io,
+kept here so the submitted artefact survives independently of the page.
 
 ## Controls
 
@@ -118,6 +121,34 @@ Three details worth knowing:
   small buffer, blurs it there, and scales it back up. Same image; a few thousand
   pixels instead of five million. If the frame budget still slips, `quality.ts`
   sheds effects in order of what is least missed — press `F` to watch it.
+
+## Press kit
+
+Everything that was ever made to sell this game is in `promo/`, at the size it
+was made, so the repository is the archive rather than a pointer to one.
+
+| | |
+|---|---|
+| `thumbnail.png` | 1260×1000 key art — the cover the GIF resolves into |
+| `cover.gif` | 630×500 itch cover: gameplay, then it lands on the key art and holds |
+| `title-anim.mp4` | 1920×1080/60 title sequence — the wordmark shattered and reassembled |
+| `title-anim.gif` | the same piece at 560×315, under itch's 3 MB image limit |
+| `title-still.png` | its final frame, for anywhere a flat lockup is wanted |
+| `shot-*.png` | the three page screenshots at 1600×900 |
+| `full/shot-*.png` | the same three at full canvas resolution, before downscaling |
+| `ITCH_PAGE.md` | every field of the itch.io submission form, ready to paste |
+| `SOCIAL_POSTS.md` | the launch posts for X, Instagram and Discord |
+| `AFTERBURN-web.zip` | the exact build uploaded to the jam |
+
+Two of the pieces are programs rather than pictures. `composer.mjs` draws the
+key art and `titlecard.mjs` renders the title sequence, both using the game's
+own modules — the real ship, the real enemy bodies, the real display face — so
+the marketing is the game rather than an impression of it. Neither is imported
+by the game; both are loaded by hand from the browser console against
+`npm run dev`, and they render offline, a frame at a time.
+
+`audio/masters/` holds the eleven generated takes the soundtrack was cut from.
+`public/music/` has the ten that shipped, levelled and renamed.
 
 ## Credits
 
