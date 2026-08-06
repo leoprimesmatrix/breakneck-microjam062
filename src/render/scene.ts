@@ -3,6 +3,7 @@ import { TAU, clamp, clamp01, easeOutCubic, easeOutQuint } from '../engine/math'
 import { ENEMY_COL, type Game } from '../game/game';
 import { ORB_R } from '../game/enemies';
 import type { StrikePlan } from '../game/strike';
+import { theme } from '../sectors';
 import { view } from '../viewport';
 import { drawEnemyBody } from './bodies';
 import { drawRadial, flareSprite, glowSprite, radialSprite } from './glow';
@@ -81,20 +82,24 @@ let spillKey = '';
 
 function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
   const { padX, padY, arenaW, arenaH, fullW, fullH } = view;
-  ctx.fillStyle = rgba(COL.void, 1);
+  ctx.fillStyle = rgba(theme.void, 1);
   ctx.fillRect(-padX, -padY, fullW, fullH);
 
   // A very soft bloom of the arena's own light spilling into the surround.
-  // Fixed in arena units, so it only has to be rebuilt when the arena resizes.
-  const key = `${arenaW.toFixed(1)}x${arenaH.toFixed(1)}`;
+  // Fixed in arena units, so it only has to be rebuilt when the arena resizes —
+  // or when the room does. The sector belongs in the key for the same reason
+  // the size does: both are things the baked gradient is a function of, and a
+  // cache that forgets one of its inputs serves the last room's light into the
+  // new one and looks like a bug in the palette.
+  const key = `${arenaW.toFixed(1)}x${arenaH.toFixed(1)}:${theme.id}`;
   if (spillKey !== key || !spill) {
     const cx = arenaW * 0.5;
     const cy = arenaH * 0.5;
     const r = Math.max(arenaW, arenaH) * 0.86;
     const gr = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
-    gr.addColorStop(0, rgba(COL.grid, 0.2));
-    gr.addColorStop(0.55, rgba(COL.grid, 0.06));
-    gr.addColorStop(1, rgba(COL.void, 0));
+    gr.addColorStop(0, rgba(theme.grid, 0.2));
+    gr.addColorStop(0.55, rgba(theme.grid, 0.06));
+    gr.addColorStop(1, rgba(theme.void, 0));
     spill = gr;
     spillKey = key;
   }
@@ -102,7 +107,7 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.fillRect(-padX, -padY, fullW, fullH);
 
   ctx.save();
-  ctx.strokeStyle = rgba(COL.gridHot, 1);
+  ctx.strokeStyle = rgba(theme.gridHot, 1);
   ctx.lineWidth = 1;
 
   // Surround texture: long faint diagonals, drifting. Gives the void a sense of
@@ -146,9 +151,16 @@ function gridPath(ctx: CanvasRenderingContext2D, step: number) {
   }
 }
 
-/** Deterministic 0..1 from a cell index — the plate layout must never flicker. */
-const hash = (i: number, j: number) => {
-  const v = Math.sin(i * 127.1 + j * 311.7) * 43758.5453;
+/**
+ * Deterministic 0..1 from a cell index — the plate layout must never flicker.
+ *
+ * The seed is the sector's, not the run's. Deterministic per frame is what
+ * stops the floor boiling; deterministic per *room* is what stops two rooms
+ * being the same room in two colours, which is most of what the eye is
+ * actually reading when it decides it has been somewhere before.
+ */
+const hash = (i: number, j: number, s: number) => {
+  const v = Math.sin(i * 127.1 + j * 311.7 + s * 74.7) * 43758.5453;
   return v - Math.floor(v);
 };
 
@@ -174,14 +186,14 @@ function drawPlates(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = 'rgba(0,0,0,0.32)';
   for (let i = 0; i < cols; i++) {
     for (let j = 0; j < rows; j++) {
-      if (hash(i, j) > 0.28) continue;
+      if (hash(i, j, theme.plateSeed) > 0.28) continue;
       const x = i * PLATE + 8;
       const y = j * PLATE + 8;
       ctx.fillRect(x, y, PLATE - 16, PLATE - 16);
     }
   }
 
-  ctx.strokeStyle = rgba(COL.grid, 0.5);
+  ctx.strokeStyle = rgba(theme.grid, 0.5);
   ctx.lineWidth = 1.4;
   ctx.beginPath();
   for (let i = 0; i < cols; i++) {
@@ -204,12 +216,12 @@ function drawPlates(ctx: CanvasRenderingContext2D) {
   ctx.stroke();
 
   // Service hatching in a minority of plates.
-  ctx.strokeStyle = rgba(COL.grid, 0.34);
+  ctx.strokeStyle = rgba(theme.grid, 0.34);
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i < cols; i++) {
     for (let j = 0; j < rows; j++) {
-      if (hash(i + 7, j + 13) > 0.16) continue;
+      if (hash(i + 7, j + 13, theme.plateSeed) > 0.16) continue;
       const x = i * PLATE + 22;
       const y = j * PLATE + 22;
       for (let k = 0; k < 5; k++) {
@@ -227,7 +239,7 @@ function drawNodes(ctx: CanvasRenderingContext2D, game: Game) {
   const { arenaW, arenaH } = view;
   const p = game.player;
   ctx.save();
-  ctx.strokeStyle = rgba(COL.gridHot, 0.3);
+  ctx.strokeStyle = rgba(theme.gridHot, 0.3);
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = PLATE; x < arenaW; x += PLATE) {
@@ -249,7 +261,7 @@ function drawNodes(ctx: CanvasRenderingContext2D, game: Game) {
       const d = Math.hypot(x - p.x, y - p.y);
       const near = clamp01(1 - d / 260);
       if (near <= 0.02) continue;
-      drawRadial(ctx, glowSprite(COL.gridHot, 0.55), x, y, 9, near * near);
+      drawRadial(ctx, glowSprite(theme.gridHot, 0.55), x, y, 9, near * near);
     }
   }
   ctx.restore();
@@ -263,9 +275,15 @@ function drawNodes(ctx: CanvasRenderingContext2D, game: Game) {
  * It is also the one piece of set dressing that is *diegetic*: the floor already
  * says AFB RECORDER LIVE, and this is the recorder.
  */
-let sweepTile: HTMLCanvasElement | null = null;
+// Baked per sector, because the wedge carries the room's colour and there is
+// no cheap way to tint a blit. One 256px tile per room, bounded by the number
+// of rooms — and keyed on the id rather than the colour on purpose, because a
+// key built from anything that animates is how `glow.ts` once minted thirty
+// canvases a second.
+const sweepTiles = new Map<string, HTMLCanvasElement>();
 function sweepSprite() {
-  if (sweepTile) return sweepTile;
+  const cached = sweepTiles.get(theme.id);
+  if (cached) return cached;
   const S = 256;
   const c = document.createElement('canvas');
   c.width = c.height = S;
@@ -279,7 +297,7 @@ function sweepSprite() {
     g.moveTo(r, r);
     g.arc(r, r, r, -t * SPAN - SPAN / N, -t * SPAN);
     g.closePath();
-    g.fillStyle = rgba(COL.gridHot, (1 - t) * (1 - t) * 0.5);
+    g.fillStyle = rgba(theme.gridHot, (1 - t) * (1 - t) * 0.5);
     g.fill();
   }
   // Mask the hub and the rim: a sweep that reaches all the way to the centre
@@ -292,7 +310,7 @@ function sweepSprite() {
   gr.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = gr;
   g.fillRect(0, 0, S, S);
-  sweepTile = c;
+  sweepTiles.set(theme.id, c);
   return c;
 }
 
@@ -309,7 +327,7 @@ function drawSweep(ctx: CanvasRenderingContext2D, game: Game) {
   // lighting mistake — a soft gradient with one straight side and no cause. A
   // hairline at the front names it: that is a beam, and it is sweeping.
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = rgba(COL.gridHot, 0.13);
+  ctx.strokeStyle = rgba(theme.gridHot, 0.13);
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(R * 0.2, 0);
@@ -330,7 +348,7 @@ function drawEtchings(ctx: CanvasRenderingContext2D) {
   const cy = arenaH * 0.5;
 
   ctx.save();
-  ctx.strokeStyle = rgba(COL.wall, 0.1);
+  ctx.strokeStyle = rgba(theme.wall, 0.1);
   ctx.lineWidth = 1.2;
   ctx.beginPath();
   ctx.arc(cx, cy, 104, 0, TAU);
@@ -367,7 +385,7 @@ function drawEtchings(ctx: CanvasRenderingContext2D) {
 
   // Hazard chevrons at the mid-point of each long wall: keep-clear markings, the
   // universal sign that something dangerous passes through here.
-  ctx.strokeStyle = rgba(COL.wall, 0.09);
+  ctx.strokeStyle = rgba(theme.wall, 0.09);
   ctx.lineWidth = 5;
   ctx.beginPath();
   for (const [ox, oy, dx, dy] of [
@@ -387,13 +405,13 @@ function drawEtchings(ctx: CanvasRenderingContext2D) {
     weight: 0.14,
     tracking: 0.3,
     align: 'right',
-    color: rgba(COL.wall, 0.2),
+    color: rgba(theme.wall, 0.2),
   });
   drawVec(ctx, 'AFB RECORDER LIVE', 20, arenaH - 16, {
     size: 11,
     weight: 0.14,
     tracking: 0.3,
-    color: rgba(COL.wall, 0.13),
+    color: rgba(theme.wall, 0.13),
   });
   ctx.restore();
 }
@@ -438,6 +456,7 @@ function drawScars(ctx: CanvasRenderingContext2D, game: Game) {
 
 /** Slow, enormous, nearly invisible blobs of light haze. Depth for four blits. */
 function drawHaze(ctx: CanvasRenderingContext2D, game: Game) {
+  if (theme.hazeAmt <= 0) return;
   const { arenaW, arenaH } = view;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -445,7 +464,7 @@ function drawHaze(ctx: CanvasRenderingContext2D, game: Game) {
     const t = game.clock * (0.035 + i * 0.014) + i * 2.2;
     const x = arenaW * (0.5 + Math.cos(t) * 0.42);
     const y = arenaH * (0.5 + Math.sin(t * 1.37) * 0.4);
-    drawRadial(ctx, glowSprite(COL.grid, 0.5), x, y, 300 + i * 90, 0.28);
+    drawRadial(ctx, glowSprite(theme.hazeCol, 0.5), x, y, 300 + i * 90, 0.28 * theme.hazeAmt);
   }
   ctx.restore();
 }
@@ -454,9 +473,15 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   const { arenaW, arenaH } = view;
   const p = game.player;
   const deco = quality.current.deco;
+  // Every alpha the room is lit by, on one dial. Turn it down and the passes
+  // below do not change what they draw, only how much of it survives — which is
+  // why a dark room costs less than a lit one rather than more.
+  const amb = theme.ambient;
+  const minor = GRID * theme.gridStep;
+  const major = PLATE * theme.gridStep;
 
   ctx.save();
-  ctx.fillStyle = rgba(COL.floor, 1);
+  ctx.fillStyle = rgba(theme.floor, 1);
   ctx.fillRect(0, 0, arenaW, arenaH);
 
   if (deco > 0) drawPlates(ctx);
@@ -465,35 +490,39 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   // Base grid, minor and major. The 4-cell major rhythm is most of what stops
   // the floor reading as procedurally tiled wallpaper.
   ctx.lineWidth = 1;
-  ctx.strokeStyle = rgba(COL.grid, 0.22);
-  gridPath(ctx, GRID);
+  ctx.strokeStyle = rgba(theme.grid, 0.22 * amb);
+  gridPath(ctx, minor);
   ctx.stroke();
-  ctx.strokeStyle = rgba(COL.grid, 0.42);
-  gridPath(ctx, PLATE);
+  ctx.strokeStyle = rgba(theme.grid, 0.42 * amb);
+  gridPath(ctx, major);
   ctx.stroke();
 
-  if (deco > 1) drawSweep(ctx, game);
+  if (deco > 1 && theme.sweep) drawSweep(ctx, game);
   drawEtchings(ctx);
   if (deco > 0) drawNodes(ctx, game);
   drawBurns(ctx, game);
 
   // The player carries a light. Re-drawing the grid clipped to a disc around the
   // ship is far cheaper than a per-line gradient and reads as a real pool.
-  const lightR = 210 + game.player.speedNorm * 190 + game.aimBlend * 70;
+  //
+  // This pass is deliberately *not* dimmed by `ambient`. In a dark room it is
+  // the only lit thing left, and the whole picture becomes what the ship is
+  // carrying — which is the point of turning the lights off.
+  const lightR = (210 + game.player.speedNorm * 190 + game.aimBlend * 70) * theme.lightR;
   ctx.save();
   ctx.beginPath();
   ctx.arc(p.x, p.y, lightR, 0, TAU);
   ctx.clip();
-  drawRadial(ctx, glowSprite(COL.gridHot, 0.16), p.x, p.y, lightR);
-  ctx.strokeStyle = rgba(COL.gridHot, 0.3);
+  drawRadial(ctx, glowSprite(theme.gridHot, 0.16), p.x, p.y, lightR);
+  ctx.strokeStyle = rgba(theme.gridHot, 0.3);
   ctx.lineWidth = 1;
-  gridPath(ctx, GRID);
+  gridPath(ctx, minor);
   ctx.stroke();
   // Plate seams catch the light too, a shade brighter than the grid does —
   // the structure should be more reflective than the paint on top of it.
-  ctx.strokeStyle = rgba(COL.gridHot, 0.42);
+  ctx.strokeStyle = rgba(theme.gridHot, 0.42);
   ctx.lineWidth = 1.4;
-  gridPath(ctx, PLATE);
+  gridPath(ctx, major);
   ctx.stroke();
   ctx.restore();
 
@@ -501,7 +530,7 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
 
   // Aim mode dims the floor so the strike line is the brightest thing on it.
   if (game.aimBlend > 0.01) {
-    ctx.fillStyle = rgba(COL.void, game.aimBlend * 0.42);
+    ctx.fillStyle = rgba(theme.void, game.aimBlend * 0.42);
     ctx.fillRect(0, 0, arenaW, arenaH);
   }
 
@@ -522,12 +551,20 @@ let wallKey = '';
 function drawWalls(ctx: CanvasRenderingContext2D) {
   const { arenaW, arenaH } = view;
   const D = 58;
-  const key = `${arenaW.toFixed(1)}x${arenaH.toFixed(1)}`;
+  // Keyed on the room as well as the size: the pit gets deeper as the room gets
+  // darker, so this is baked from `ambient` too.
+  const key = `${arenaW.toFixed(1)}x${arenaH.toFixed(1)}:${theme.id}`;
   if (wallKey !== key || !wallGrads) {
+    // A dim room needs a darker lip, or the edge stops reading as a drop and
+    // starts reading as the floor simply ending. The mid stop is carried as a
+    // ratio of the first rather than as its own number, so the falloff keeps
+    // its shape at every depth instead of flattening as the lip deepens.
+    const deep = Math.min(1, 0.62 + (1 - theme.ambient) * 0.3);
+    const mid = deep * (0.16 / 0.62);
     const mk = (x0: number, y0: number, x1: number, y1: number) => {
       const g = ctx.createLinearGradient(x0, y0, x1, y1);
-      g.addColorStop(0, 'rgba(0,0,0,0.62)');
-      g.addColorStop(0.45, 'rgba(0,0,0,0.16)');
+      g.addColorStop(0, `rgba(0,0,0,${deep})`);
+      g.addColorStop(0.45, `rgba(0,0,0,${mid})`);
       g.addColorStop(1, 'rgba(0,0,0,0)');
       return g;
     };
@@ -562,7 +599,11 @@ function drawDust(ctx: CanvasRenderingContext2D, game: Game) {
   const { arenaW, arenaH } = view;
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < 66; i++) {
+  // Count scales, but the seeds do not: mote `i` is in the same place at the
+  // same speed in every room, so turning the density down thins the field
+  // rather than replacing it.
+  const n = Math.round(66 * theme.dust);
+  for (let i = 0; i < n; i++) {
     const seed = i * 12.9898;
     const fx = frac(Math.sin(seed) * 43758.5453);
     const fy = frac(Math.sin(seed * 1.7) * 21451.19);
@@ -570,8 +611,15 @@ function drawDust(ctx: CanvasRenderingContext2D, game: Game) {
     const depth = 0.4 + layer * 0.3;
     const spd = (6 + fx * 16) * depth;
     const x = (fx * arenaW + Math.sin(game.clock * 0.3 * depth + fy * 9) * 14 * depth + arenaW) % arenaW;
-    const y = (fy * arenaH + game.clock * spd) % arenaH;
-    ctx.fillStyle = rgba(COL.gridHot, (0.05 + fy * 0.1) * depth);
+    // Rising is the same field scrolled the other way. It gets its own branch
+    // rather than a sign on the offset because the offset grows without bound
+    // and `%` in this language keeps the sign of its left operand — negate it
+    // naively and the whole field walks off the top of the arena a minute in.
+    const off = game.clock * spd;
+    const y = theme.dustRise
+      ? (fy * arenaH - (off % arenaH) + arenaH) % arenaH
+      : (fy * arenaH + off) % arenaH;
+    ctx.fillStyle = rgba(theme.gridHot, (0.05 + fy * 0.1) * depth);
     const s = (0.9 + fx * 1.4) * depth;
     ctx.fillRect(x, y, s, s);
   }
@@ -924,7 +972,10 @@ function bracket(ctx: CanvasRenderingContext2D, x: number, y: number, r: number)
 function drawFrame(ctx: CanvasRenderingContext2D, game: Game) {
   const { arenaW, arenaH } = view;
   const pulse = game.alarm;
-  const base = pulse > 0 ? mix(COL.wall, COL.danger, 0.35 + pulse * 0.5) : COL.wall;
+  // The bezel is the room's, but the alarm is not: danger red stays `COL.danger`
+  // in every sector, because a warning that changed colour with the decor would
+  // be a warning the player has to learn twice.
+  const base = pulse > 0 ? mix(theme.wall, COL.danger, 0.35 + pulse * 0.5) : theme.wall;
 
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';

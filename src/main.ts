@@ -4,6 +4,7 @@ import { solveStrike } from './game/strike';
 import { render, skip, stages, toggleStats } from './render/renderer';
 import { resetHud } from './render/hud';
 import { quality } from './render/quality';
+import { setSector, theme } from './sectors';
 import { updateViewport, view } from './viewport';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -110,8 +111,11 @@ if (import.meta.env.DEV) {
     for (let k = 0; k < n; k++) game.step(FIXED_DT);
   };
   w.__resetHud = resetHud;
-  // Lets a headless driver evaluate a heading without advancing the world,
-  // which is what makes an automated balance pass possible at all.
+  // The room, live. Assigning into it is how a sector is inspected before there
+  // is any way to reach one in play — and it is the only way to prove that the
+  // gradients and sprites baked from the palette actually notice when it moves.
+  w.__theme = theme;
+  w.__setSector = setSector;
   w.__solve = (angle: number) => {
     const p = solveStrike(game.swarm, game.player.x, game.player.y, angle, 0);
     return { kills: p.kills, dist: p.dist, blocked: p.blocked };

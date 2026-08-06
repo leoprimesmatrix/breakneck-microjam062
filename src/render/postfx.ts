@@ -1,6 +1,7 @@
 import { COL, rgba } from '../config';
 import { clamp } from '../engine/math';
 import type { Game } from '../game/game';
+import { theme } from '../sectors';
 import { view } from '../viewport';
 import { quality } from './quality';
 
@@ -155,7 +156,11 @@ export class PostFX {
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'source-over';
     c.filter = 'none';
-    c.fillStyle = rgba(COL.void, 1);
+    // The room's void, not the palette's. This clear is what shows through the
+    // letterboxing when the arena's aspect does not match the window's, so a
+    // sector whose surround stayed the old black would wear a frame of the
+    // previous room around it.
+    c.fillStyle = rgba(theme.void, 1);
     c.fillRect(0, 0, this.scene.width, this.scene.height);
 
     c.setTransform(
