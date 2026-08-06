@@ -1,6 +1,8 @@
 import {
   AIM_TIMESCALE,
   AIM_TIMESCALE_DRY,
+  BURN_CAP,
+  BURN_LIFE,
   COL,
   COMBO_CAP,
   COMBO_TIMEOUT,
@@ -15,6 +17,8 @@ import {
   MAX_HULL,
   MULTI_NAMES,
   PLAYER_R,
+  SCAR_CAP,
+  SCAR_LIFE,
   STRIKE_RANGE_PER_KILL,
   TIMESCALE_EASE,
   WAVE_BREATHER,
@@ -1006,13 +1010,13 @@ export class Game {
   }
 
   private addScar(x0: number, y0: number, x1: number, y1: number) {
-    if (this.scars.length > 12) this.scars.shift();
-    this.scars.push({ x0, y0, x1, y1, life: 2.2, max: 2.2 });
+    if (this.scars.length > SCAR_CAP) this.scars.shift();
+    this.scars.push({ x0, y0, x1, y1, life: SCAR_LIFE, max: SCAR_LIFE });
   }
 
   private addBurn(x: number, y: number, r: number, col: RGB) {
-    if (this.burns.length > 26) this.burns.shift();
-    this.burns.push({ x, y, r, col, life: 8, max: 8 });
+    if (this.burns.length > BURN_CAP) this.burns.shift();
+    this.burns.push({ x, y, r, col, life: BURN_LIFE, max: BURN_LIFE });
   }
 
   private pushPopup(

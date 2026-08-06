@@ -74,6 +74,18 @@ export const WAVE_BREATHER = 1.5;
 export const HINT_CARD_TIME = 3.4;
 
 /**
+ * How long the fight stays written on the floor. These were 2.2s and 8s as
+ * inline literals, which meant the arena reset itself within a minute of the
+ * last kill and wave nine photographed identically to wave one. The live marks
+ * now linger; when they finally fade, the stain layer keeps a faint print for
+ * the rest of the sector.
+ */
+export const SCAR_LIFE = 6;
+export const SCAR_CAP = 26;
+export const BURN_LIFE = 30;
+export const BURN_CAP = 64;
+
+/**
  * Multi-kill names. Index = kills in a single strike, minus two.
  * Naming the payoff is most of what makes a player chase it again.
  */

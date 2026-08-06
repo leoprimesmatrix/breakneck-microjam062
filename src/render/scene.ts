@@ -1,4 +1,4 @@
-import { COL, PLAYER_R, SPAWN_TELEGRAPH, rgba, type RGB } from '../config';
+import { BURN_CAP, COL, PLAYER_R, SCAR_CAP, SPAWN_TELEGRAPH, rgba, type RGB } from '../config';
 import { TAU, clamp, clamp01, easeOutCubic, easeOutQuint } from '../engine/math';
 import { ENEMY_COL, type Game } from '../game/game';
 import { ORB_R } from '../game/enemies';
@@ -10,6 +10,7 @@ import { drawEnemyBody } from './bodies';
 import { drawRadial, flareSprite, glowSprite, radialSprite } from './glow';
 import { quality } from './quality';
 import { drawPlayer } from './ship';
+import { drawStain, stainMark } from './stain';
 import { drawVec, vecWidth } from './text';
 
 /**
@@ -447,18 +448,40 @@ function drawEtchings(ctx: CanvasRenderingContext2D) {
   ctx.restore();
 }
 
+/**
+ * How many live marks a tier affords. The caps were raised so the floor stays
+ * written-on, which also made them the first entity count the quality governor
+ * can actually reach: a struggling machine draws the freshest quarter, and the
+ * stain layer still carries the history for one blit.
+ */
+function markBudget(cap: number) {
+  const deco = quality.current.deco;
+  return deco > 1 ? cap : deco > 0 ? cap >> 1 : cap >> 2;
+}
+
 /** Scorch stains where things died, with a brief dying ember at their heart. */
 function drawBurns(ctx: CanvasRenderingContext2D, game: Game) {
   if (!game.burns.length) return;
   const scorch = scorchSprite();
-  for (const b of game.burns) {
+  // Newest last in the array; drawing from the tail keeps the budget spent on
+  // the marks the player just made.
+  const first = Math.max(0, game.burns.length - markBudget(BURN_CAP));
+  for (let i = 0; i < game.burns.length; i++) {
+    const b = game.burns[i];
+    // Every burn also leaves a permanent print in the stain layer, stamped on
+    // first sight rather than at death: the live mark covers it for thirty
+    // seconds anyway, and stamping here means a burn shoved out of the cap
+    // early still made it into the record.
+    stainMark(b, b.x, b.y, b.r, b.col);
+    if (i < first) continue;
     const t = b.life / b.max;
     // The stain holds most of its life, then lets go.
     drawRadial(ctx, scorch, b.x, b.y, b.r, 0.55 * Math.min(1, t * 2.2));
   }
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  for (const b of game.burns) {
+  for (let i = first; i < game.burns.length; i++) {
+    const b = game.burns[i];
     const age = 1 - b.life / b.max;
     const ember = clamp01(1 - age / 0.16);
     if (ember <= 0.01) continue;
@@ -473,7 +496,9 @@ function drawScars(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   ctx.lineCap = 'round';
-  for (const s of game.scars) {
+  const first = Math.max(0, game.scars.length - markBudget(SCAR_CAP));
+  for (let i = first; i < game.scars.length; i++) {
+    const s = game.scars[i];
     const t = s.life / s.max;
     ctx.strokeStyle = rgba(COL.strike, 0.1 * t * t);
     ctx.lineWidth = 7;
@@ -516,6 +541,9 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.fillRect(0, 0, arenaW, arenaH);
 
   if (deco > 0) drawPlates(ctx);
+  // The sector's accumulated damage, under the grid: the grid is paint on the
+  // structure, and char under paint is what a used floor actually looks like.
+  drawStain(ctx);
   if (deco > 1) drawHaze(ctx, game);
 
   // Base grid, minor and major. The 4-cell major rhythm is most of what stops
