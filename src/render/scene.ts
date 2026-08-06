@@ -6,6 +6,7 @@ import type { StrikePlan } from '../game/strike';
 import { terrain } from '../game/terrain';
 import { theme } from '../sectors';
 import { view } from '../viewport';
+import { aperturePath, apertureRim, drawCast, drawFar, drawOver, drawUnder } from './backdrop';
 import { drawEnemyBody } from './bodies';
 import { drawRadial, flareSprite, glowSprite, radialSprite } from './glow';
 import { quality } from './quality';
@@ -56,6 +57,10 @@ export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   // of the room, but scars and scorch belong to the floor it is standing on.
   drawTerrain(ctx, game);
   drawDust(ctx, game);
+  // Foreground atmosphere — embers, ash, tumbling debris. In front of the deck
+  // so it has somewhere to be, and behind every actor so it can never be the
+  // reason a body was hard to see.
+  drawOver(ctx, game);
   // The pit's shadow falls on the *room*, and stops there. Drawn over the actors
   // it dims an enemy pinned against an edge and an aim line ending at one, which
   // trades legibility for atmosphere at exactly the moments the player is
@@ -110,6 +115,11 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
   }
   ctx.fillStyle = spill;
   ctx.fillRect(-padX, -padY, fullW, fullH);
+
+  // The room beyond the room. Drawn over the spill so the arena's own light
+  // still sits in front of the horizon, and before the hairline texture below,
+  // which is now the cheap fallback rather than the whole surround.
+  drawFar(ctx, game);
 
   // A room with the lights off has nothing out there to catch them. Drawn
   // structure in the surround would say the dark is a dimmer setting rather
@@ -673,13 +683,33 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   const major = PLATE * theme.gridStep;
 
   ctx.save();
+
+  // What is under the deck, then the deck itself with its holes cut in one
+  // path. `evenodd` turns the aperture subpaths into holes, so this is a single
+  // fill rather than a clip and a second pass — and with `aperture: 'none'` it
+  // is exactly the `fillRect` it replaced, because the path is just the rect.
+  //
+  // Everything below still draws over the whole arena. The holes are lit from
+  // beneath, not cut out of the room: the grid, the plates and the marks all
+  // carry on across them, which is what stops an aperture reading as a pit
+  // the player might think they can fall into.
+  drawUnder(ctx, game);
+  const holes = aperturePath(game);
+  const deck = new Path2D();
+  deck.rect(0, 0, arenaW, arenaH);
+  if (holes) deck.addPath(holes);
   ctx.fillStyle = rgba(theme.floor, 1);
-  ctx.fillRect(0, 0, arenaW, arenaH);
+  ctx.fill(deck, 'evenodd');
+  // The lip. Without it a hole is a decal lying on the floor rather than an
+  // opening in it — and in the lattice it was indistinguishable from a pillar.
+  if (holes) apertureRim(ctx, holes);
 
   if (deco > 0) drawPlates(ctx);
   // The sector's accumulated damage, under the grid: the grid is paint on the
   // structure, and char under paint is what a used floor actually looks like.
   drawStain(ctx);
+  // The room's lighting design, over the deck and under the survey grid.
+  drawCast(ctx, game);
   if (deco > 1) drawHaze(ctx, game);
 
   // Base grid, minor and major. The 4-cell major rhythm is most of what stops

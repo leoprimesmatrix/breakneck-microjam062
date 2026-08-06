@@ -1,5 +1,6 @@
 import { COL, type RGB } from './config';
 import type { EnemyKind } from './game/enemies';
+import type { Aperture, SceneId } from './render/backdrop';
 
 /**
  * The room, as data.
@@ -81,6 +82,29 @@ export interface SectorTheme {
    * the brightness down on.
    */
   backdrop: 'strata' | 'lattice' | 'stormfront' | 'void';
+  /**
+   * The environment proper — see `render/backdrop.ts`.
+   *
+   * `backdrop` above is the original surround texture and stays as the cheap
+   * fallback the quality governor drops back to. `scene` is the actual place:
+   * a horizon, a middle distance, and something underneath the deck. It is a
+   * separate field rather than a widening of `backdrop` because the two are
+   * drawn by different passes at different depths, and because a sector must be
+   * able to lose its scenery without losing its surround.
+   */
+  scene: SceneId;
+  /**
+   * The holes in the deck, through which `scene`'s under-layer is visible.
+   *
+   * This is the field that moved the sector system from a palette swap to a
+   * change of place: measured, the old backdrop switch changed under 1% of the
+   * pixels on screen, because all of it lived in a ~44px letterbox border. An
+   * aperture puts the room's identity in the middle of the frame instead.
+   *
+   * They are cosmetic in the strongest sense — no entry here is reachable from
+   * `terrain`, `solveStrike` or any contact test. You cannot fall in one.
+   */
+  aperture: Aperture;
   /**
    * 0..1: how badly the room's lighting is failing. A flickering grid is the
    * cheapest cinematography there is — it turns a floor into a place with an
@@ -180,6 +204,11 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     dust: 1,
     dustRise: false,
     backdrop: 'strata',
+    // A calibration hall: service bays on a lit horizon, ribs marching past,
+    // cold light in the inspection trenches. The control room, and the only one
+    // whose scenery is meant to be reassuring.
+    scene: 'hall',
+    aperture: 'slots',
     flicker: 0,
     pulse: 0,
     ambient: 1,
@@ -227,6 +256,11 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     dust: 0.3,
     dustRise: false,
     backdrop: 'void',
+    // The grid has failed. Dead cable runs, one beacon still turning, and the
+    // room arcing every few seconds. `aperture: 'none'` is the point — a lit
+    // floor would undo the outage the whole sector is built on.
+    scene: 'outage',
+    aperture: 'none',
     flicker: 0,
     pulse: 0,
     ambient: 0.12,
@@ -275,6 +309,10 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     dust: 1.6,
     dustRise: true,
     backdrop: 'strata',
+    // The heat is *below* you. Molten channels run under a grate deck, embers
+    // come up through it, and the machines are black against the pour line.
+    scene: 'furnace',
+    aperture: 'grate',
     flicker: 0,
     pulse: 0,
     ambient: 0.86,
@@ -325,6 +363,11 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     dust: 0.7,
     dustRise: false,
     backdrop: 'lattice',
+    // The only room with a vanishing point: frames receding to a centre, beams
+    // running to it, data travelling out along them. Glass panels in the deck
+    // let the same depth show under the player's feet.
+    scene: 'scaffold',
+    aperture: 'tiles',
     flicker: 0,
     pulse: 0,
     ambient: 1,
@@ -352,11 +395,20 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     id: 'derelict',
     name: 'THE DERELICT',
     brief: 'Decommissioned. Incompletely.',
-    void: [7, 8, 10],
-    floor: [15, 16, 19],
-    grid: [52, 56, 63],
+    // Pushed green.
+    //
+    // The first pass at this room was a neutral grey two or three units away
+    // from the range's blue-steel, and measured against it the two sectors were
+    // 10 apart on a 0-255 scale — the closest pair in the game, and close
+    // enough that no amount of scenery in the surround could separate them. The
+    // floor is the largest area on screen; if two rooms share it they are the
+    // same room. Old fluorescent over dead paint is the note here, and it is
+    // still near-monochrome, so the actors keep all of the saturation.
+    void: [9, 12, 9],
+    floor: [21, 24, 19],
+    grid: [64, 72, 58],
     gridHot: [216, 160, 72],
-    wall: [140, 146, 156],
+    wall: [150, 152, 134],
     plateSeed: 19,
     plates: 'panel',
     etch: 'derelict',
@@ -366,6 +418,11 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     dust: 0.8,
     dustRise: false,
     backdrop: 'void',
+    // The hull is open. A starfield above the tear, cables swinging out of it,
+    // one strip light still stuttering — the only cold sky in the six rooms,
+    // which is most of why this one reads as abandoned rather than hostile.
+    scene: 'breach',
+    aperture: 'tears',
     flicker: 0.7,
     pulse: 0,
     ambient: 0.55,
@@ -408,6 +465,16 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     dust: 1.2,
     dustRise: true,
     backdrop: 'stormfront',
+    // Weather the walls are not entirely keeping out: cloud masses, lightning
+    // that lights the room, ash falling in front of it. The deck is cracked and
+    // the cracks breathe red — the same recipe as the derelict's tears, seeded
+    // differently so the two rooms never share a rip.
+    scene: 'storm',
+    // Vents, not rips. The crucible first wore the derelict's `tears`, and a
+    // scatter of glowing red quadrilaterals in a room whose hostiles are red
+    // quadrilaterals is a legibility bug, not a look. Thin slots read as
+    // architecture; a diamond reads as a body.
+    aperture: 'slots',
     flicker: 0,
     pulse: 0.6,
     ambient: 0.92,

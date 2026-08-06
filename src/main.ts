@@ -1,3 +1,4 @@
+import { camera } from './engine/camera';
 import { Input } from './engine/input';
 import { Game } from './game/game';
 import { solveStrike } from './game/strike';
@@ -127,6 +128,10 @@ if (import.meta.env.DEV) {
   w.__theme = theme;
   w.__setSector = setSector;
   w.__terrain = terrain;
+  // Depth is the one thing that cannot be checked from a single frame — proving
+  // the background moves against the floor means reading the offset while the
+  // ship is somewhere else, so the camera has to be reachable.
+  w.__camera = camera;
   w.__solve = (angle: number) => {
     const p = solveStrike(game.swarm, game.player.x, game.player.y, angle, 0);
     return { kills: p.kills, dist: p.dist, blocked: p.blocked };

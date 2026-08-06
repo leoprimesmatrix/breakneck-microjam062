@@ -27,6 +27,7 @@ import {
   type RGB,
 } from '../config';
 import { Audio } from '../engine/audio';
+import { camera } from '../engine/camera';
 import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
 import { TAU, clamp, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
@@ -429,6 +430,7 @@ export class Game {
     this.swarm.reset();
     this.particles.reset();
     this.juice.reset();
+    camera.reset();
     this.director.reset();
     this.popups.length = 0;
     this.hints.length = 0;
@@ -571,6 +573,11 @@ export class Game {
 
     if (this.juice.consumeHitstop(dtReal)) return;
     this.juice.update(dtReal);
+    // Presentation state on real time, exactly like the juice above it. The
+    // camera never moves the playfield — it only tells the background layers
+    // how far a real camera would have slid, so they can slide against a floor
+    // that stays put.
+    camera.update(dtReal, this.player.x, this.player.y, this.aimBlend, this.aimAngle);
 
     // Screen-space UI reads input before the game does, and eats whatever it
     // uses. That is what stops a click on the gear from also starting the run,
