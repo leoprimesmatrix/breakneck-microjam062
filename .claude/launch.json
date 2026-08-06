@@ -3,15 +3,21 @@
   "configurations": [
     {
       "name": "afterburn",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "tools/serve.ps1"
+      ],
+      "port": 8790
+    },
+    {
+      "name": "afterburn-vite",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
-    },
-    {
-      "name": "afterburn-dist",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["vite", "preview", "--port", "4173", "--strictPort"],
-      "port": 4173
     }
   ]
 }

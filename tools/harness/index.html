@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>AFTERBURN — dev</title>
+    <style>
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #04050c; touch-action: none; }
+      canvas { display: block; width: 100%; height: 100%; cursor: none; }
+      #boot {
+        position: fixed; inset: 0; display: grid; place-items: center; color: #7e92be;
+        font: 600 12px/1.6 "Inter", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+        letter-spacing: 0.4em; text-transform: uppercase; pointer-events: none;
+        white-space: pre-wrap; text-align: center; padding: 2rem;
+      }
+      #boot.err { color: #ff6b6b; letter-spacing: 0; text-transform: none; font-family: ui-monospace, Consolas, monospace; text-align: left; }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="boot">Compiling</div>
+    <script type="module">
+      const boot = document.getElementById('boot');
+      try {
+        const { load } = await import('/harness/tsload.mjs');
+        await load('/src/main.ts');
+
+        const w = window;
+
+        // This page is often driven from an automation pane that is not being
+        // composited, where requestAnimationFrame never fires. Everything below
+        // advances and draws on demand instead.
+        w.ADV = (seconds) => w.__advance(seconds);
+        w.DRAW = () => w.__render();
+
+        /** Advance, draw, and POST the canvas to tools/tmp. */
+        w.SHOT = async (name, seconds = 0) => {
+          if (seconds) w.__advance(seconds);
+          w.__render();
+          const data = document.getElementById('game').toDataURL('image/png');
+          await fetch('/save?name=' + encodeURIComponent(name), { method: 'POST', body: data });
+          return name;
+        };
+
+        /** Fire the cold open the way the first real gesture does. */
+        w.ARM = () => w.__game.arm();
+
+        /** Bake dist/index.html. See tools/harness/bake.mjs. */
+        w.BAKE = (opts) => import('/harness/bake.mjs').then((m) => m.bake(opts));
+
+        /**
+         * A deterministic still of the room, for before/after comparison.
+         *
+         * Three things in a live frame are random or wall-clock driven, and all
+         * three have to be pinned or two runs of the same code disagree:
+         *
+         *   - `juice.seed` is `Math.random()` per page load, and any shake at
+         *     all offsets the whole scene buffer. `juice.reset()` zeroes it.
+         *   - `arm()` requests the cold open, which fires `ignite()` whenever
+         *     the first note lands — so whether the camera has been kicked
+         *     depends on audio timing. Setting `armed` directly skips it.
+         *   - `grainPhase` advances per *render*, not per step. Quality tier 1
+         *     is tier 0 with grain off and nothing else changed, so pinning
+         *     there removes it without touching anything being measured.
+         *
+         * Returns a hash per pose. Equal hashes mean an identical image.
+         */
+        w.SNAP = async (tag, poses) => {
+          const g = w.__game, v = w.__view, cv = document.getElementById('game');
+          const out = {};
+          w.__quality.level = 1;
+          w.__quality.locked = true;
+          for (const s of ['hud', 'screens', 'cursor']) w.__skip.add(s);
+          // `alarm` is a getter over hull and clock, so the red bezel is posed
+          // by taking the ship down to its last hull point rather than set.
+          poses = poses || {
+            centre: { x: 0.5, y: 0.5, aim: 0, hull: 3, clock: 20 },
+            corner: { x: 0.17, y: 0.78, aim: 0, hull: 3, clock: 33.5 },
+            aiming: { x: 0.62, y: 0.4, aim: 1, hull: 3, clock: 47.25 },
+            danger: { x: 0.5, y: 0.28, aim: 0, hull: 1, clock: 61 },
+          };
+          for (const k of Object.keys(poses)) {
+            const p = poses[k];
+            g.armed = true;
+            g.state = 'play';
+            g.swarm.reset();
+            g.particles.reset();
+            g.juice.reset();
+            g.scars.length = 0;
+            g.burns.length = 0;
+            g.popups.length = 0;
+            g.clock = p.clock;
+            g.aimBlend = p.aim;
+            g.player.hull = p.hull;
+            g.player.x = v.arenaW * p.x;
+            g.player.y = v.arenaH * p.y;
+            g.player.vx = g.player.vy = 0;
+            g.player.striking = false;
+            w.__render();
+            const data = cv.toDataURL('image/png');
+            let h = 2166136261;
+            for (let i = 0; i < data.length; i++) { h ^= data.charCodeAt(i); h = Math.imul(h, 16777619); }
+            out[k] = (h >>> 0).toString(16);
+            await fetch('/save?name=' + encodeURIComponent(tag + '-' + k + '.png'), { method: 'POST', body: data });
+          }
+          return out;
+        };
+
+        // Silent unless asked. This page gets driven by automation as often as
+        // by a person, and a game that starts singing because a tool opened it
+        // is a game nobody can work next to. `?sound` is the way in.
+        //
+        // Held at the master gain rather than through `audio.toggleMute()` on
+        // purpose: mute is a saved player setting, and a dev page must not
+        // write to the player's profile just by being opened.
+        if (!new URLSearchParams(location.search).has('sound')) {
+          const hold = () => {
+            const a = w.__game && w.__game.audio;
+            if (a && a.ctx) a.master.gain.value = 0;
+            const t = a && a.tracks && a.tracks.decks;
+            if (t) for (const d of t) { d.el.muted = true; d.el.volume = 0; }
+          };
+          setInterval(hold, 200);
+          hold();
+          const tag = document.createElement('div');
+          tag.textContent = 'MUTED — open /?sound to hear it';
+          tag.style.cssText =
+            'position:fixed;left:12px;bottom:10px;z-index:9;pointer-events:none;' +
+            'font:700 10px/1 Inter,system-ui,sans-serif;letter-spacing:.18em;' +
+            'color:#7e92be;opacity:.55';
+          document.body.appendChild(tag);
+        }
+
+        boot.remove();
+      } catch (e) {
+        boot.className = 'err';
+        boot.textContent = (e && e.stack) || String(e);
+        throw e;
+      }
+    </script>
+  </body>
+</html>

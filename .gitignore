@@ -16,3 +16,6 @@ dist/
 promo/titlecard2/tmp/
 
 .DS_Store
+
+# The no-node toolchain writes its screenshots here.
+tools/tmp/
