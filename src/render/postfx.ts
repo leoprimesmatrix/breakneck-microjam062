@@ -192,6 +192,23 @@ export class PostFX {
       L.g.globalAlpha = 1;
       L.g.clearRect(0, 0, L.c.width, L.c.height);
       L.g.drawImage(src, 0, 0, L.c.width, L.c.height);
+      // Bright pass, on the first level only.
+      //
+      // This pyramid had no threshold, so it bloomed the entire frame — the
+      // near-black floor included — and lifted the blacks the neon actors are
+      // supposed to sit against. Measured, the six rooms had a luma standard
+      // deviation of 18.6 to 22.7: a flat picture, and not by intent.
+      //
+      // canvas2d has no shader to threshold with, but `multiply` from the same
+      // source squares every channel, which is a perfectly good soft knee. A
+      // floor at 0.08 falls to 0.006 and stops blooming; a strike at 0.95 stays
+      // at 0.90 and still does. It costs one extra blit on a buffer a few
+      // thousand pixels wide, and `src !== dst` here so it is well defined.
+      if (i === 0) {
+        L.g.globalCompositeOperation = 'multiply';
+        L.g.drawImage(src, 0, 0, L.c.width, L.c.height);
+        L.g.globalCompositeOperation = 'source-over';
+      }
       src = L.c;
     }
     // Fold coarse levels down into level 0, so only one buffer is composited.
@@ -276,9 +293,26 @@ export class PostFX {
       // stay legible at the exact moment the screen is brightest — which is the
       // moment the player is deciding where to go next.
       c.globalCompositeOperation = 'lighter';
-      c.globalAlpha = clamp(0.3 + speed * 0.12 + j.flash * 0.3, 0, 1);
+      // Raised hard from 0.3, because the bright pass above squares the buffer
+      // and a thresholded bloom carries a fraction of the energy an
+      // unthresholded one did. At 0.52 the blacks came back beautifully — deep
+      // black went from nothing to a quarter of the range's frame — but the
+      // highlights lost their glow with them and contrast did not move at all.
+      // A high alpha is only dangerous when the floor is in the buffer. It
+      // isn't any more, so the neon can have all of it.
+      //
+      // Clamped to 1 and not beyond: `globalAlpha` outside [0,1] is ignored by
+      // the spec, so the assignment would silently no-op and leave whatever the
+      // previous alpha happened to be. Extra gain comes from a second additive
+      // pass instead, which is well defined.
+      const gain = 0.92 + speed * 0.18 + j.flash * 0.4;
       const b = this.bloom[0].c;
+      c.globalAlpha = clamp(gain, 0, 1);
       c.drawImage(b, -6, -6, w + 12, h + 12);
+      if (gain > 1) {
+        c.globalAlpha = clamp(gain - 1, 0, 1);
+        c.drawImage(b, -6, -6, w + 12, h + 12);
+      }
       c.globalAlpha = 1;
       c.globalCompositeOperation = 'source-over';
     }
@@ -297,7 +331,11 @@ export class PostFX {
       this.vignette = g;
       this.vignetteKey = key;
     }
-    c.globalAlpha = 0.5 + game.aimBlend * 0.22;
+    // Was a flat 0.5 + aim, ungated and identical in every room — and since it
+    // is strongest exactly where the surround is, it was erasing the horizon
+    // each sector had just been given. Rooms that own their darkness (blackout)
+    // still want it; rooms with weather out there want much less of it.
+    c.globalAlpha = theme.vignette + game.aimBlend * 0.22;
     c.fillStyle = this.vignette;
     c.fillRect(0, 0, w, h);
     c.globalAlpha = 1;

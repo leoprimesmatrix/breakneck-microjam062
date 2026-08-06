@@ -106,6 +106,13 @@ export interface SectorTheme {
    */
   aperture: Aperture;
   /**
+   * How hard the corners are crushed toward black, before the aim blend adds
+   * its own. This used to be a hardcoded 0.5 applied identically to all six
+   * rooms — and because a vignette is strongest exactly where the surround is,
+   * it was quietly deleting the horizon each sector had just been given.
+   */
+  vignette: number;
+  /**
    * 0..1: how badly the room's lighting is failing. A flickering grid is the
    * cheapest cinematography there is — it turns a floor into a place with an
    * electrical system, and an electrical system into a thing that is wrong.
@@ -209,6 +216,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // whose scenery is meant to be reassuring.
     scene: 'hall',
     aperture: 'slots',
+    vignette: 0.42,
     flicker: 0,
     pulse: 0,
     ambient: 1,
@@ -261,6 +269,8 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // floor would undo the outage the whole sector is built on.
     scene: 'outage',
     aperture: 'none',
+    // The dark is the sector. This is the one room that wants heavy corners.
+    vignette: 0.58,
     flicker: 0,
     pulse: 0,
     ambient: 0.12,
@@ -313,6 +323,8 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // come up through it, and the machines are black against the pour line.
     scene: 'furnace',
     aperture: 'grate',
+    // There is a foundry out there. Let it be seen.
+    vignette: 0.34,
     flicker: 0,
     pulse: 0,
     ambient: 0.86,
@@ -368,6 +380,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // let the same depth show under the player's feet.
     scene: 'scaffold',
     aperture: 'tiles',
+    vignette: 0.4,
     flicker: 0,
     pulse: 0,
     ambient: 1,
@@ -423,6 +436,8 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // which is most of why this one reads as abandoned rather than hostile.
     scene: 'breach',
     aperture: 'tears',
+    // The breach is out in the surround; crushing it would close the hull.
+    vignette: 0.38,
     flicker: 0.7,
     pulse: 0,
     ambient: 0.55,
@@ -475,6 +490,8 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // quadrilaterals is a legibility bug, not a look. Thin slots read as
     // architecture; a diamond reads as a body.
     aperture: 'slots',
+    // Weather, and it should reach the edge of the frame.
+    vignette: 0.36,
     flicker: 0,
     pulse: 0.6,
     ambient: 0.92,
