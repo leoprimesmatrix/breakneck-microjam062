@@ -1,6 +1,7 @@
 import { Input } from './engine/input';
 import { Game } from './game/game';
 import { solveStrike } from './game/strike';
+import { terrain } from './game/terrain';
 import { render, skip, stages, toggleStats } from './render/renderer';
 import { resetHud } from './render/hud';
 import { quality } from './render/quality';
@@ -94,6 +95,7 @@ addEventListener('keydown', (e) => {
   if (import.meta.env.DEV && e.code === 'KeyN') {
     const ids = Object.keys(SECTORS) as SectorId[];
     setSector(ids[(ids.indexOf(theme.id) + 1) % ids.length]);
+    game.rebuildRoom();
   }
 });
 
@@ -124,6 +126,7 @@ if (import.meta.env.DEV) {
   // gradients and sprites baked from the palette actually notice when it moves.
   w.__theme = theme;
   w.__setSector = setSector;
+  w.__terrain = terrain;
   w.__solve = (angle: number) => {
     const p = solveStrike(game.swarm, game.player.x, game.player.y, angle, 0);
     return { kills: p.kills, dist: p.dist, blocked: p.blocked };

@@ -1,6 +1,7 @@
 import { PLAYER_R } from '../config';
 import { TAU, angleDelta, clamp, randRange, type Rng } from '../engine/math';
 import { view } from '../viewport';
+import { terrain } from './terrain';
 
 /**
  * Enemies.
@@ -466,6 +467,15 @@ export class Swarm {
         e.y = H - m;
         e.vy = e.kind === 'lancer' && e.state === 2 ? -Math.abs(e.vy) : 0;
       }
+
+      // And the interior ones. Three lines, and they are what make the room
+      // read as solid rather than as painted on: a mote that walks through a
+      // pillar tells the player the pillar is scenery, one frame before they
+      // find out the hard way that it is not.
+      const axis = terrain.evict(e, m);
+      const charging = e.kind === 'lancer' && e.state === 2;
+      if (axis === 'x') e.vx = charging ? -e.vx : 0;
+      else if (axis === 'y') e.vy = charging ? -e.vy : 0;
     }
 
     for (const o of this.orbs) {
@@ -489,6 +499,11 @@ export class Swarm {
         o.y = H - ORB_R;
         o.vy = -Math.abs(o.vy);
       }
+      // Slabs absorb orbs rather than bouncing them. Cheaper, and it turns
+      // every pillar into cover — which is a real gift in the spine fight, and
+      // most of why terrain makes the room better to play in rather than just
+      // harder to cross.
+      if (terrain.contains(o.x, o.y, ORB_R)) o.alive = false;
       if (o.age > o.life) o.alive = false;
     }
   }

@@ -33,6 +33,7 @@ import { view } from '../viewport';
 import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
 import { Player } from './player';
 import { clonePlan, solveStrike, type StrikePlan } from './strike';
+import { makeTerrain, terrain } from './terrain';
 import { Director } from './waves';
 
 export type GameState = 'title' | 'play' | 'paused' | 'dead';
@@ -341,6 +342,18 @@ export class Game {
     }
   }
 
+  /**
+   * Re-furnish the room for whatever sector is current.
+   *
+   * Separate from `start` because a sector change and a run start are two
+   * different events that happen to need the same thing done — and by the time
+   * the campaign is swapping rooms mid-run, this is the one call it has to
+   * make rather than a list of them it could get wrong.
+   */
+  rebuildRoom() {
+    makeTerrain(this.rng);
+  }
+
   start() {
     this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
     this.player.reset();
@@ -353,6 +366,10 @@ export class Game {
     this.scars.length = 0;
     this.burns.length = 0;
     this.seenKinds.clear();
+    // Furniture is per run, not per wave: a room you learned the shape of in
+    // wave one is a room you can still use in wave nine, and re-rolling it
+    // between waves would make that knowledge worthless.
+    this.rebuildRoom();
 
     this.score = 0;
     this.combo = 1;
@@ -897,6 +914,13 @@ export class Game {
     }
 
     // --- world
+    //
+    // On dilated time, not real time, and that is the whole feature. While the
+    // player holds, the world runs at a ninth speed and the aim solve re-runs
+    // every frame — so a closing shutter is watched falling through the preview
+    // line, cutting it short a few units at a time. The game's best-looking
+    // thing, doing something it has never done.
+    terrain.update(dt);
     this.swarm.targetX = p.x;
     this.swarm.targetY = p.y;
     this.swarm.firedOrbs = 0;
@@ -1042,6 +1066,17 @@ export class Game {
     if (!plan) return;
     const hit = plan.hits[index];
 
+    // Stopped is not blocked, and the difference is the whole reason terrain
+    // gets its own arm here. A shield stops you because you read the fight
+    // wrong, and `onBlocked` stuns you for it. A slab stops you because it is
+    // in the way, the preview said so before you committed, and the ship
+    // simply arrived. Punishing geometry as though it were a mistake is how a
+    // room full of cover starts feeling like a room full of traps.
+    if (hit.blocked && hit.block) {
+      this.onSlab(hit.x, hit.y);
+      return;
+    }
+
     if (hit.blocked && hit.enemy) {
       this.onBlocked(hit.enemy, hit.x, hit.y);
       return;
@@ -1138,6 +1173,25 @@ export class Game {
     this.particles.spall(x, y, away, COL.ward, 16, this.rng);
     this.pushPopup(x, y - 40, 'BLOCKED', 'FLANK IT', 'bad', COL.ward);
     this.audio.onBlocked(this.panAt(x));
+  }
+
+  /**
+   * The strike arriving against a slab.
+   *
+   * Deliberately the arena-wall feedback rather than the shield's: no stun, no
+   * knockback, no popup telling the player off. The preview drew the line
+   * stopping exactly here before they let go, so this is a landing, not a
+   * mistake — and the only thing it owes them is the weight of having hit
+   * something solid at three thousand units a second.
+   */
+  private onSlab(x: number, y: number) {
+    const p = this.player;
+    this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, theme.wall, 10, this.rng);
+    this.particles.ring(x, y, theme.wall, 44, 0.3, 2.5);
+    this.juice.addHitstop(0.03);
+    this.juice.addShake(10);
+    this.juice.addPunch(0.035);
+    this.audio.onWall(this.panAt(x));
   }
 
   private finishStrike() {
@@ -1334,6 +1388,15 @@ export class Game {
     for (const q of this.popups) {
       q.x *= sx;
       q.y *= sy;
+    }
+    // Rectangles survive a non-uniform scale as rectangles, which is most of
+    // why the furniture is boxes: a circle remapped by two different factors is
+    // an ellipse, and an ellipse is a shape the slab test cannot describe.
+    for (const b of terrain.list) {
+      b.x *= sx;
+      b.y *= sy;
+      b.w *= sx;
+      b.h *= sy;
     }
     p.trail.length = 0;
   }

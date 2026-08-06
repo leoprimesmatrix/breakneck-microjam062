@@ -95,6 +95,17 @@ export interface SectorTheme {
    * chance to keep.
    */
   bodyFalloff: number;
+
+  // ---------------------------------------------------------------- fight
+  /**
+   * Furniture the strike cannot pass through. `pillars` scatters fixed slabs;
+   * `shutters` puts bars on offset cycles that open and close.
+   *
+   * This is the only field in the theme that changes what the room *does*
+   * rather than what it looks like, which is why it is the only one that has
+   * to be set with the fight in mind rather than the photograph.
+   */
+  terrain: 'none' | 'pillars' | 'shutters';
 }
 
 /**
@@ -135,6 +146,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeCol: COL.grid,
     hazeAmt: 1,
     bodyFalloff: 0,
+    terrain: 'none',
   },
 
   /**
@@ -174,6 +186,10 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeCol: COL.grid,
     hazeAmt: 0,
     bodyFalloff: 1,
+    // Pillars in the dark, which is the pairing that makes both features
+    // sharper: cover you cannot see until you are beside it, and a preview
+    // line that is the only thing telling you it is there.
+    terrain: 'pillars',
   },
 
   /**
@@ -214,6 +230,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeCol: [220, 62, 22],
     hazeAmt: 1.05,
     bodyFalloff: 0,
+    terrain: 'shutters',
   },
 };
 

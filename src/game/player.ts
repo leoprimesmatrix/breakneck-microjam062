@@ -10,6 +10,7 @@ import {
 import { clamp, dampAngle } from '../engine/math';
 import { view } from '../viewport';
 import type { StrikePlan } from './strike';
+import { terrain } from './terrain';
 
 export interface Afterimage {
   x: number;
@@ -173,6 +174,14 @@ export class Player {
       this.y = view.arenaH - m;
       this.vy = -Math.abs(this.vy) * 0.3;
     }
+
+    // Interior walls, resolved exactly like the outer ones. The strike itself
+    // can never end inside a slab because the solver clamps `dist` at the
+    // contact point; this only catches the drift afterwards, and a shutter
+    // that closes on top of a parked ship.
+    const axis = terrain.evict(this, m);
+    if (axis === 'x') this.vx *= -0.3;
+    else if (axis === 'y') this.vy *= -0.3;
 
     this.angle = dampAngle(this.angle, aimAngle, 16, dt);
   }

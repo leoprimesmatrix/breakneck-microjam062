@@ -6,6 +6,7 @@ import {
 } from '../config';
 import { view } from '../viewport';
 import { ORB_R, Swarm, type Enemy, type Orb } from './enemies';
+import { rayBox, terrain, type Block } from './terrain';
 
 /**
  * The strike solver.
@@ -21,11 +22,12 @@ export interface StrikeHit {
   /** Exactly one of these is set. */
   enemy: Enemy | null;
   orb: Orb | null;
+  block: Block | null;
   /** Distance along the ray at which contact happens. */
   d: number;
   x: number;
   y: number;
-  /** A ward shield: this one stops the strike instead of dying to it. */
+  /** A ward shield or a slab: this one stops the strike instead of dying to it. */
   blocked: boolean;
 }
 
@@ -41,28 +43,38 @@ export interface StrikePlan {
   hits: StrikeHit[];
   kills: number;
   blocked: boolean;
+  /**
+   * What stopped it, when something did. A shield is a mistake the player made;
+   * a slab is geometry. They deserve different feedback and different words, so
+   * the reason travels with the plan rather than being re-derived downstream.
+   */
+  blockKind: '' | 'shield' | 'solid';
   hitWall: boolean;
 }
 
 /** Reused between frames — the aim preview runs this every single frame. */
 const plan: StrikePlan = {
   x0: 0, y0: 0, dx: 1, dy: 0, dist: 0, reach: 0,
-  hits: [], kills: 0, blocked: false, hitWall: false,
+  hits: [], kills: 0, blocked: false, blockKind: '', hitWall: false,
 };
 
 interface Candidate {
   enemy: Enemy | null;
   orb: Orb | null;
+  block: Block | null;
   d: number;
 }
 const candidates: Candidate[] = [];
 let candCount = 0;
 
-function pushCandidate(enemy: Enemy | null, orb: Orb | null, d: number) {
-  if (candCount === candidates.length) candidates.push({ enemy: null, orb: null, d: 0 });
+function pushCandidate(enemy: Enemy | null, orb: Orb | null, block: Block | null, d: number) {
+  if (candCount === candidates.length) {
+    candidates.push({ enemy: null, orb: null, block: null, d: 0 });
+  }
   const c = candidates[candCount++];
   c.enemy = enemy;
   c.orb = orb;
+  c.block = block;
   c.d = d;
 }
 
@@ -114,18 +126,30 @@ export function solveStrike(
   plan.hits.length = 0;
   plan.kills = 0;
   plan.blocked = false;
+  plan.blockKind = '';
   plan.hitWall = false;
   candCount = 0;
 
   for (const e of swarm.list) {
     if (!e.alive || e.spawn > 0) continue;
     const d = rayCircle(x0, y0, dx, dy, e.x, e.y, Swarm.hitR(e));
-    if (d >= 0 && d <= STRIKE_RANGE_MAX) pushCandidate(e, null, d);
+    if (d >= 0 && d <= STRIKE_RANGE_MAX) pushCandidate(e, null, null, d);
   }
   for (const o of swarm.orbs) {
     if (!o.alive) continue;
     const d = rayCircle(x0, y0, dx, dy, o.x, o.y, ORB_R + PLAYER_R * 0.7);
-    if (d >= 0 && d <= STRIKE_RANGE_MAX) pushCandidate(null, o, d);
+    if (d >= 0 && d <= STRIKE_RANGE_MAX) pushCandidate(null, o, null, d);
+  }
+  // Terrain is a third candidate class, sibling to the other two — deliberately
+  // not routed through `Swarm.blocks`. That function answers one precise
+  // question, "is this contact point on the shielded side of this enemy", and
+  // it has exactly one caller. Teaching it about walls would make it two
+  // questions in one function, and the ward's guarantee is clean precisely
+  // because it is only ever asked the one.
+  for (const b of terrain.list) {
+    if (!b.solid) continue;
+    const d = rayBox(x0, y0, dx, dy, b);
+    if (d >= 0 && d <= STRIKE_RANGE_MAX) pushCandidate(null, null, b, d);
   }
 
   // Insertion sort: candCount is tiny (only bodies the ray actually touches)
@@ -151,14 +175,23 @@ export function solveStrike(
     const cx = x0 + dx * c.d;
     const cy = y0 + dy * c.d;
 
-    if (c.enemy && Swarm.blocks(c.enemy, cx, cy)) {
-      plan.hits.push({ enemy: c.enemy, orb: null, d: c.d, x: cx, y: cy, blocked: true });
+    if (c.block) {
+      plan.hits.push({ enemy: null, orb: null, block: c.block, d: c.d, x: cx, y: cy, blocked: true });
       plan.blocked = true;
+      plan.blockKind = 'solid';
       dist = Math.max(0, c.d - 2);
       break;
     }
 
-    plan.hits.push({ enemy: c.enemy, orb: c.orb, d: c.d, x: cx, y: cy, blocked: false });
+    if (c.enemy && Swarm.blocks(c.enemy, cx, cy)) {
+      plan.hits.push({ enemy: c.enemy, orb: null, block: null, d: c.d, x: cx, y: cy, blocked: true });
+      plan.blocked = true;
+      plan.blockKind = 'shield';
+      dist = Math.max(0, c.d - 2);
+      break;
+    }
+
+    plan.hits.push({ enemy: c.enemy, orb: c.orb, block: null, d: c.d, x: cx, y: cy, blocked: false });
     plan.kills++;
     range = Math.min(range + STRIKE_RANGE_PER_KILL, STRIKE_RANGE_MAX);
     dist = Math.min(range, wall);
@@ -177,6 +210,6 @@ export function clonePlan(p: StrikePlan): StrikePlan {
     x0: p.x0, y0: p.y0, dx: p.dx, dy: p.dy,
     dist: p.dist, reach: p.reach,
     hits: p.hits.map((h) => ({ ...h })),
-    kills: p.kills, blocked: p.blocked, hitWall: p.hitWall,
+    kills: p.kills, blocked: p.blocked, blockKind: p.blockKind, hitWall: p.hitWall,
   };
 }

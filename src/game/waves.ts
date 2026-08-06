@@ -2,6 +2,7 @@ import { SPAWN_TELEGRAPH } from '../config';
 import { randRange, type Rng } from '../engine/math';
 import { view } from '../viewport';
 import type { EnemyKind, Swarm } from './enemies';
+import { terrain } from './terrain';
 
 /**
  * The wave director.
@@ -257,6 +258,10 @@ function pickSpawn(rng: Rng, px: number, py: number) {
   for (let i = 0; i < 8; i++) {
     const x = randRange(rng, m, view.arenaW - m);
     const y = randRange(rng, m, view.arenaH - m);
+    // Nothing arrives inside a slab. The loop was already written to tolerate
+    // rejections, so this is one more reason to draw again rather than a new
+    // failure mode — and the fallback below still cannot come up empty.
+    if (terrain.contains(x, y, 40)) continue;
     const d = Math.hypot(x - px, y - py);
     if (d > 330) {
       scratch.x = x;
@@ -271,5 +276,9 @@ function pickSpawn(rng: Rng, px: number, py: number) {
   }
   scratch.x = bestX;
   scratch.y = bestY;
+  // The fallback is the furthest of whatever was drawn, which may still be a
+  // slab if every sample landed in one. Evicting is cheaper than sampling
+  // again and cannot loop.
+  terrain.evict(scratch, 40);
   return scratch;
 }

@@ -3,6 +3,7 @@ import { TAU, clamp, clamp01, easeOutCubic, easeOutQuint } from '../engine/math'
 import { ENEMY_COL, type Game } from '../game/game';
 import { ORB_R } from '../game/enemies';
 import type { StrikePlan } from '../game/strike';
+import { terrain } from '../game/terrain';
 import { theme } from '../sectors';
 import { view } from '../viewport';
 import { drawEnemyBody } from './bodies';
@@ -50,6 +51,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.clip();
 
   drawFloor(ctx, game);
+  // Over the floor and its marks, under everything that moves: a slab is part
+  // of the room, but scars and scorch belong to the floor it is standing on.
+  drawTerrain(ctx, game);
   drawDust(ctx, game);
   // The pit's shadow falls on the *room*, and stops there. Drawn over the actors
   // it dims an enemy pinned against an edge and an aim line ending at one, which
@@ -618,6 +622,75 @@ function drawWalls(ctx: CanvasRenderingContext2D) {
 }
 
 /**
+ * The furniture: slabs the strike cannot pass through.
+ *
+ * Drawn as objects standing *on* the floor rather than as marks painted into
+ * it — a cast shadow, a lit top face, a darker body — because everything else
+ * at floor level in this game is paint, and a pillar that reads as paint is a
+ * pillar the player will try to strike through exactly once.
+ *
+ * A shutter that is open is not drawn as a ghost of itself. It is drawn as the
+ * housing it retracts into, so the player learns where the gaps are *while*
+ * they are gaps, which is the only moment that knowledge is worth anything.
+ */
+function drawTerrain(ctx: CanvasRenderingContext2D, game: Game) {
+  if (!terrain.list.length) return;
+  const lit = quality.current.deco > 0;
+  ctx.save();
+  for (const b of terrain.list) {
+    const x = b.x - b.w;
+    const y = b.y - b.h;
+    const w = b.w * 2;
+    const h = b.h * 2;
+
+    // The warning belongs to the open shutter, not the closed one — it is a
+    // statement about what this gap is *going* to be, and by the time the slab
+    // is there it has nothing left to warn about. Drawn before the retracted
+    // branch returns, or it would never appear at all.
+    if (b.warn > 0) {
+      const a = b.warn * (0.45 + 0.55 * Math.sin(game.clock * 26));
+      ctx.strokeStyle = rgba(COL.warn, Math.max(0, a));
+      ctx.lineWidth = 2.6;
+      ctx.strokeRect(x - 3, y - 3, w + 6, h + 6);
+    }
+
+    if (!b.solid) {
+      // Retracted. The rails it came out of, and nothing else.
+      ctx.strokeStyle = rgba(theme.wall, 0.16);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 7]);
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      ctx.setLineDash([]);
+      continue;
+    }
+
+    // Contact shadow, offset away from the room's centre so every slab in the
+    // arena agrees about where the light is.
+    if (lit) {
+      const ox = (b.x - view.arenaW * 0.5) * 0.02;
+      const oy = (b.y - view.arenaH * 0.5) * 0.02 + 5;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(x + ox - 2, y + oy - 2, w + 4, h + 4);
+    }
+
+    ctx.fillStyle = rgba(theme.floor, 1);
+    ctx.fillRect(x, y, w, h);
+    // The body, a shade above the floor it sits on, then a brighter cap along
+    // the top edge. Two fills and a stroke is the whole of the third dimension
+    // in here, and it is enough.
+    ctx.fillStyle = rgba(theme.grid, 0.5);
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = rgba(theme.gridHot, 0.14);
+    ctx.fillRect(x, y, w, Math.min(7, h * 0.34));
+
+    ctx.strokeStyle = rgba(theme.wall, 0.5);
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(x + 0.7, y + 0.7, w - 1.4, h - 1.4);
+  }
+  ctx.restore();
+}
+
+/**
  * A slow parallax field of motes in three depth layers; deterministic, so it
  * never pops on resize. The layers differ in size, speed and brightness
  * together — vary only one and the field reads as noise at one distance.
@@ -896,33 +969,50 @@ function drawAim(ctx: CanvasRenderingContext2D, game: Game, plan: StrikePlan) {
 
   // Blocked tail — where the strike would have gone, and cannot.
   if (plan.blocked) {
+    // A shield is a mistake; a slab is furniture. Red is the game's word for
+    // "you got this wrong", and spending it on a wall that was drawn in the
+    // room before the player even aimed teaches them to distrust the colour.
+    // The room's own wall colour says *stopped* without saying *punished*.
+    const solid = plan.blockKind === 'solid';
+    const mark = solid ? theme.wall : COL.danger;
     const bx = plan.x0 + plan.dx * (plan.dist + 210);
     const by = plan.y0 + plan.dy * (plan.dist + 210);
     ctx.setLineDash([9, 13]);
-    ctx.strokeStyle = rgba(COL.danger, 0.5 * focusA);
+    ctx.strokeStyle = rgba(mark, 0.5 * focusA);
     ctx.lineWidth = 2.4;
     line(ctx, ex, ey, bx, by);
     ctx.setLineDash([]);
 
-    const s = 15 + Math.sin(t * 12) * 2;
-    ctx.strokeStyle = rgba(COL.danger, 0.95 * focusA);
-    ctx.lineWidth = 4;
-    line(ctx, ex - s, ey - s, ex + s, ey + s);
-    line(ctx, ex + s, ey - s, ex - s, ey + s);
+    if (solid) {
+      // A bar across the line rather than a cross through it: the strike is
+      // arriving somewhere, not failing at it.
+      const nx = -plan.dy;
+      const ny = plan.dx;
+      const s = 17;
+      ctx.strokeStyle = rgba(mark, 0.9 * focusA);
+      ctx.lineWidth = 4;
+      line(ctx, ex + nx * s, ey + ny * s, ex - nx * s, ey - ny * s);
+    } else {
+      const s = 15 + Math.sin(t * 12) * 2;
+      ctx.strokeStyle = rgba(mark, 0.95 * focusA);
+      ctx.lineWidth = 4;
+      line(ctx, ex - s, ey - s, ex + s, ey + s);
+      line(ctx, ex + s, ey - s, ex - s, ey + s);
+    }
 
     // Naming the failure is worth more than any number of red pixels: the
     // player has to connect "this line stops" to "that arc is a shield".
     if (game.aimBlend > 0.05) {
       ctx.globalCompositeOperation = 'source-over';
-      drawVec(ctx, 'SHIELDED', ex, ey - 40, {
+      drawVec(ctx, solid ? 'SOLID' : 'SHIELDED', ex, ey - 40, {
         size: 17,
         weight: 0.15,
         tracking: 0.18,
         align: 'center',
         baseline: 'mid',
-        color: rgba(COL.danger, focusA),
+        color: rgba(mark, focusA),
         glow: 1,
-        glowColor: rgba(COL.danger, focusA),
+        glowColor: rgba(mark, focusA),
       });
       ctx.globalCompositeOperation = 'lighter';
     }
@@ -946,6 +1036,9 @@ function drawAim(ctx: CanvasRenderingContext2D, game: Game, plan: StrikePlan) {
     const r = (target ? target.r : ORB_R) + 13;
 
     if (h.blocked) {
+      // A slab already has its bar and its label; ringing it in danger red
+      // would spend the mistake colour on furniture. The ring is the shield's.
+      if (h.block) continue;
       ctx.strokeStyle = rgba(COL.danger, 0.9 * focusA);
       ctx.lineWidth = 3;
       ctx.beginPath();
