@@ -27,6 +27,7 @@ import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
 import { TAU, clamp, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
 import { Particles } from '../engine/particles';
+import { theme } from '../sectors';
 import type { UiHit } from '../settings';
 import { view } from '../viewport';
 import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
@@ -1150,7 +1151,12 @@ export class Game {
       // A ship at full strike speed meeting a steel wall. The camera slams
       // into it along the travel direction; the fiction does not permit this
       // to read softer than popping an orb.
-      this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, COL.wall, 12, this.rng);
+      //
+      // The debris is the room's wall rather than the palette's, because this
+      // is the one particle burst in the game that is made of the scenery: it
+      // is chips off whatever you just hit, and in a warm room those chips are
+      // warm.
+      this.particles.spall(p.x, p.y, this.aimAngle + Math.PI * 0.5, theme.wall, 12, this.rng);
       this.juice.addHitstop(0.03);
       this.juice.addShake(11);
       this.juice.addKick(plan.dx, plan.dy, 9);

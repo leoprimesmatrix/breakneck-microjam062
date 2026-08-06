@@ -4,7 +4,7 @@ import { solveStrike } from './game/strike';
 import { render, skip, stages, toggleStats } from './render/renderer';
 import { resetHud } from './render/hud';
 import { quality } from './render/quality';
-import { setSector, theme } from './sectors';
+import { SECTORS, setSector, theme, type SectorId } from './sectors';
 import { updateViewport, view } from './viewport';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -87,6 +87,14 @@ addEventListener('pointerdown', unlock);
 addEventListener('keydown', (e) => {
   if (e.code === 'KeyM') game.audio.toggleMute();
   if (e.code === 'KeyF') toggleStats();
+  // Cycle rooms. Nothing in the game reaches a second sector yet, so until the
+  // campaign does this is the only way to stand in one — and it stays useful
+  // afterwards as the way to inspect a room without playing to it. Folds away
+  // in a build along with the rest of the dev block.
+  if (import.meta.env.DEV && e.code === 'KeyN') {
+    const ids = Object.keys(SECTORS) as SectorId[];
+    setSector(ids[(ids.indexOf(theme.id) + 1) % ids.length]);
+  }
 });
 
 // A tab that loses focus mid-run should not come back to a dead player.

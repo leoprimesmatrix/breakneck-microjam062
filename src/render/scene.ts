@@ -106,6 +106,12 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
   ctx.fillStyle = spill;
   ctx.fillRect(-padX, -padY, fullW, fullH);
 
+  // A room with the lights off has nothing out there to catch them. Drawn
+  // structure in the surround would say the dark is a dimmer setting rather
+  // than an outage — and it is the one pass whose absence the eye reads as
+  // depth rather than as something missing.
+  if (theme.backdrop === 'void') return;
+
   ctx.save();
   ctx.strokeStyle = rgba(theme.gridHot, 1);
   ctx.lineWidth = 1;
@@ -176,10 +182,13 @@ const hash = (i: number, j: number, s: number) => {
  * about as much as one enemy.
  */
 function drawPlates(ctx: CanvasRenderingContext2D) {
+  if (theme.plates === 'none') return;
   const { arenaW, arenaH } = view;
   const cols = Math.ceil(arenaW / PLATE);
   const rows = Math.ceil(arenaH / PLATE);
-  const c = PLATE * 0.14;
+  // A grate has no chamfer: the cut corner is what says *machined*, and a
+  // floor you can see through was cast, not milled.
+  const c = theme.plates === 'grate' ? 0 : PLATE * 0.14;
 
   ctx.save();
   // Recessed panels first: a few plates sit lower than the rest.
@@ -215,18 +224,35 @@ function drawPlates(ctx: CanvasRenderingContext2D) {
   }
   ctx.stroke();
 
-  // Service hatching in a minority of plates.
   ctx.strokeStyle = rgba(theme.grid, 0.34);
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let i = 0; i < cols; i++) {
-    for (let j = 0; j < rows; j++) {
-      if (hash(i + 7, j + 13, theme.plateSeed) > 0.16) continue;
-      const x = i * PLATE + 22;
-      const y = j * PLATE + 22;
-      for (let k = 0; k < 5; k++) {
-        ctx.moveTo(x + k * 13, y);
-        ctx.lineTo(x, y + k * 13);
+  if (theme.plates === 'grate') {
+    // Bars right across every plate, not hatching inside a few. The rhythm is
+    // the point: closely spaced parallel lines over the whole floor read as
+    // something you are standing *on top of* with a drop underneath, which is
+    // a different claim about the room than a panel seam makes.
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        const x = i * PLATE + 8;
+        const y = j * PLATE + 8;
+        for (let k = 14; k < PLATE - 16; k += 15) {
+          ctx.moveTo(x, y + k);
+          ctx.lineTo(x + PLATE - 16, y + k);
+        }
+      }
+    }
+  } else {
+    // Service hatching in a minority of plates.
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        if (hash(i + 7, j + 13, theme.plateSeed) > 0.16) continue;
+        const x = i * PLATE + 22;
+        const y = j * PLATE + 22;
+        for (let k = 0; k < 5; k++) {
+          ctx.moveTo(x + k * 13, y);
+          ctx.lineTo(x, y + k * 13);
+        }
       }
     }
   }
@@ -343,6 +369,7 @@ function drawSweep(ctx: CanvasRenderingContext2D, game: Game) {
  * makes a space feel surveyed and built rather than generated.
  */
 function drawEtchings(ctx: CanvasRenderingContext2D) {
+  if (theme.etch === 'none') return;
   const { arenaW, arenaH } = view;
   const cx = arenaW * 0.5;
   const cy = arenaH * 0.5;
@@ -727,10 +754,33 @@ function drawSpawns(ctx: CanvasRenderingContext2D, game: Game) {
 }
 
 // ------------------------------------------------------------------ enemies
+/**
+ * How much of a body survives being outside the ship's light.
+ *
+ * The floor comment for this — that darkness is atmosphere and invisibility is
+ * a stolen hull point — is enforced here by the floor of 0.3 rather than by
+ * good intentions. At that alpha the halo and the silhouette both still read,
+ * so an approaching mote is a smudge you can act on from across the room; it
+ * resolves into a body as it enters the pool. What the player loses in the
+ * dark is detail and confidence, never the information.
+ */
+const LIT_MIN = 0.3;
+
+function bodyAlpha(game: Game, x: number, y: number) {
+  if (theme.bodyFalloff <= 0) return 1;
+  const p = game.player;
+  // Matches the pool in `drawFloor`, with a soft shoulder past its edge so
+  // bodies fade in rather than crossing a visible ring.
+  const lightR = (210 + p.speedNorm * 190 + game.aimBlend * 70) * theme.lightR;
+  const d = Math.hypot(x - p.x, y - p.y);
+  const out = clamp01((d - lightR * 0.55) / (lightR * 0.9));
+  return 1 - theme.bodyFalloff * (1 - LIT_MIN) * out;
+}
+
 function drawEnemies(ctx: CanvasRenderingContext2D, game: Game) {
   for (const e of game.swarm.list) {
     if (!e.alive || e.spawn > 0) continue;
-    drawEnemyBody(ctx, e, game, 1);
+    drawEnemyBody(ctx, e, game, bodyAlpha(game, e.x, e.y));
   }
 }
 
