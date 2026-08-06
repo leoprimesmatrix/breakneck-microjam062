@@ -117,9 +117,48 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, game: Game) {
   // depth rather than as something missing.
   if (theme.backdrop === 'void') return;
 
+  if (theme.backdrop === 'stormfront') {
+    // Soft masses of the room's own light drifting past the arena. Weather,
+    // not architecture: the finale's surround should feel like something is
+    // happening out there that the walls are keeping out.
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 4; i++) {
+      const t = game.clock * (0.02 + i * 0.009) + i * 1.7;
+      const x = -padX + fullW * (0.5 + Math.cos(t) * 0.52);
+      const y = -padY + fullH * (0.5 + Math.sin(t * 0.83 + i) * 0.5);
+      drawRadial(ctx, glowSprite(theme.hazeCol, 0.4), x, y, 380 + i * 120, 0.1);
+    }
+    ctx.restore();
+    return;
+  }
+
   ctx.save();
   ctx.strokeStyle = rgba(theme.gridHot, 1);
   ctx.lineWidth = 1;
+
+  if (theme.backdrop === 'lattice') {
+    // An orthogonal wireframe, drifting slowly on both axes. The same idea as
+    // the strata — two families of line, two speeds — with the diagonals
+    // traded for right angles, because this sector's whole personality is
+    // that nothing in it is allowed to be oblique.
+    ctx.globalAlpha = 0.04;
+    const step = 190;
+    const ox = (game.clock * 6) % step;
+    const oy = (game.clock * 3.4) % step;
+    ctx.beginPath();
+    for (let x = -padX + ox - step; x < -padX + fullW + step; x += step) {
+      ctx.moveTo(x, -padY);
+      ctx.lineTo(x, -padY + fullH);
+    }
+    for (let y = -padY + oy - step; y < -padY + fullH + step; y += step) {
+      ctx.moveTo(-padX, y);
+      ctx.lineTo(-padX + fullW, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
 
   // Surround texture: long faint diagonals, drifting. Gives the void a sense of
   // scale without competing with the playfield for attention.
@@ -189,33 +228,42 @@ const hash = (i: number, j: number, s: number) => {
 function drawPlates(ctx: CanvasRenderingContext2D) {
   if (theme.plates === 'none') return;
   const { arenaW, arenaH } = view;
-  const cols = Math.ceil(arenaW / PLATE);
-  const rows = Math.ceil(arenaH / PLATE);
+  // Tiles are one grid cell, not four: a clean-room floor is laid in small
+  // uniform squares, and the finer pitch is most of what makes it read as a
+  // different material rather than a recolour of the same one.
+  const P = theme.plates === 'tile' ? GRID * theme.gridStep : PLATE;
+  const cols = Math.ceil(arenaW / P);
+  const rows = Math.ceil(arenaH / P);
   // A grate has no chamfer: the cut corner is what says *machined*, and a
-  // floor you can see through was cast, not milled.
-  const c = theme.plates === 'grate' ? 0 : PLATE * 0.14;
+  // floor you can see through was cast, not milled. A tile has a small one.
+  const c = theme.plates === 'grate' ? 0 : theme.plates === 'tile' ? P * 0.08 : P * 0.14;
+  const inset = theme.plates === 'tile' ? 3 : 8;
 
   ctx.save();
-  // Recessed panels first: a few plates sit lower than the rest.
-  ctx.fillStyle = 'rgba(0,0,0,0.32)';
-  for (let i = 0; i < cols; i++) {
-    for (let j = 0; j < rows; j++) {
-      if (hash(i, j, theme.plateSeed) > 0.28) continue;
-      const x = i * PLATE + 8;
-      const y = j * PLATE + 8;
-      ctx.fillRect(x, y, PLATE - 16, PLATE - 16);
+  // Recessed panels first: a few plates sit lower than the rest. Tiles do not
+  // recess — a clean room does not have missing tiles until something is very
+  // wrong, and that is not this sector's story.
+  if (theme.plates !== 'tile') {
+    ctx.fillStyle = 'rgba(0,0,0,0.32)';
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        if (hash(i, j, theme.plateSeed) > 0.28) continue;
+        const x = i * P + inset;
+        const y = j * P + inset;
+        ctx.fillRect(x, y, P - inset * 2, P - inset * 2);
+      }
     }
   }
 
-  ctx.strokeStyle = rgba(theme.grid, 0.5);
-  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = rgba(theme.grid, theme.plates === 'tile' ? 0.32 : 0.5);
+  ctx.lineWidth = theme.plates === 'tile' ? 1 : 1.4;
   ctx.beginPath();
   for (let i = 0; i < cols; i++) {
     for (let j = 0; j < rows; j++) {
-      const x = i * PLATE + 8;
-      const y = j * PLATE + 8;
-      const w = PLATE - 16;
-      const h = PLATE - 16;
+      const x = i * P + inset;
+      const y = j * P + inset;
+      const w = P - inset * 2;
+      const h = P - inset * 2;
       // A chamfered rectangle. The cut corner is the whole tell — a plain rect
       // is a table cell, a chamfered one was machined.
       ctx.moveTo(x + c, y);
@@ -229,6 +277,20 @@ function drawPlates(ctx: CanvasRenderingContext2D) {
   }
   ctx.stroke();
 
+  if (theme.plates === 'tile') {
+    // A few tiles brighter than their neighbours, as if recently replaced.
+    // The one blemish a clean room is allowed, and the seed makes it theirs.
+    ctx.fillStyle = rgba(theme.grid, 0.13);
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) {
+        if (hash(i + 3, j + 5, theme.plateSeed) > 0.06) continue;
+        ctx.fillRect(i * P + inset, j * P + inset, P - inset * 2, P - inset * 2);
+      }
+    }
+    ctx.restore();
+    return;
+  }
+
   ctx.strokeStyle = rgba(theme.grid, 0.34);
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -239,11 +301,11 @@ function drawPlates(ctx: CanvasRenderingContext2D) {
     // a different claim about the room than a panel seam makes.
     for (let i = 0; i < cols; i++) {
       for (let j = 0; j < rows; j++) {
-        const x = i * PLATE + 8;
-        const y = j * PLATE + 8;
-        for (let k = 14; k < PLATE - 16; k += 15) {
+        const x = i * P + inset;
+        const y = j * P + inset;
+        for (let k = 14; k < P - inset * 2; k += 15) {
           ctx.moveTo(x, y + k);
-          ctx.lineTo(x + PLATE - 16, y + k);
+          ctx.lineTo(x + P - inset * 2, y + k);
         }
       }
     }
@@ -252,8 +314,8 @@ function drawPlates(ctx: CanvasRenderingContext2D) {
     for (let i = 0; i < cols; i++) {
       for (let j = 0; j < rows; j++) {
         if (hash(i + 7, j + 13, theme.plateSeed) > 0.16) continue;
-        const x = i * PLATE + 22;
-        const y = j * PLATE + 22;
+        const x = i * P + 22;
+        const y = j * P + 22;
         for (let k = 0; k < 5; k++) {
           ctx.moveTo(x + k * 13, y);
           ctx.lineTo(x, y + k * 13);
@@ -375,6 +437,10 @@ function drawSweep(ctx: CanvasRenderingContext2D, game: Game) {
  */
 function drawEtchings(ctx: CanvasRenderingContext2D) {
   if (theme.etch === 'none') return;
+  if (theme.etch === 'derelict') {
+    drawDerelictEtch(ctx);
+    return;
+  }
   const { arenaW, arenaH } = view;
   const cx = arenaW * 0.5;
   const cy = arenaH * 0.5;
@@ -432,7 +498,65 @@ function drawEtchings(ctx: CanvasRenderingContext2D) {
   }
   ctx.stroke();
 
-  drawVec(ctx, 'ARENA 062', arenaW - 20, arenaH - 16, {
+  drawVec(ctx, theme.stamp, arenaW - 20, arenaH - 16, {
+    size: 11,
+    weight: 0.14,
+    tracking: 0.3,
+    align: 'right',
+    color: rgba(theme.wall, 0.2),
+  });
+  drawVec(ctx, 'AFB RECORDER LIVE', 20, arenaH - 16, {
+    size: 11,
+    weight: 0.14,
+    tracking: 0.3,
+    color: rgba(theme.wall, 0.13),
+  });
+  ctx.restore();
+}
+
+/**
+ * What a working bay paints on its floor, left to peel: keep-clear chevron
+ * lanes along both long walls, a huge bay number worn to a ghost, and the
+ * stamp. No survey court — nobody was measuring anything down here, they were
+ * moving cargo.
+ */
+function drawDerelictEtch(ctx: CanvasRenderingContext2D) {
+  const { arenaW, arenaH } = view;
+
+  ctx.save();
+  // Chevron lanes: a full row across the floor at each long wall, the
+  // universal "things pass through here" marking, at ceremony-free weight.
+  ctx.strokeStyle = rgba(theme.wall, 0.11);
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  for (const [oy, dy] of [[70, 1], [arenaH - 70, -1]] as const) {
+    for (let x = 60; x < arenaW - 40; x += 46) {
+      ctx.moveTo(x - 15, oy - 13 * dy);
+      ctx.lineTo(x, oy);
+      ctx.lineTo(x + 15, oy - 13 * dy);
+    }
+  }
+  ctx.stroke();
+
+  // The bay number, enormous and nearly gone. A number this large is not
+  // signage, it is infrastructure — meant to be read from a crane.
+  drawVec(ctx, '07', arenaW * 0.5, arenaH * 0.52, {
+    size: Math.min(300, arenaH * 0.44),
+    weight: 0.1,
+    tracking: 0.12,
+    align: 'center',
+    baseline: 'mid',
+    color: rgba(theme.wall, 0.045),
+  });
+
+  // A cargo outline that has not held cargo in years.
+  ctx.strokeStyle = rgba(theme.gridHot, 0.08);
+  ctx.lineWidth = 2;
+  ctx.setLineDash([16, 12]);
+  ctx.strokeRect(arenaW * 0.12, arenaH * 0.3, arenaW * 0.2, arenaH * 0.4);
+  ctx.setLineDash([]);
+
+  drawVec(ctx, theme.stamp, arenaW - 20, arenaH - 16, {
     size: 11,
     weight: 0.14,
     tracking: 0.3,
@@ -532,7 +656,19 @@ function drawFloor(ctx: CanvasRenderingContext2D, game: Game) {
   // Every alpha the room is lit by, on one dial. Turn it down and the passes
   // below do not change what they draw, only how much of it survives — which is
   // why a dark room costs less than a lit one rather than more.
-  const amb = theme.ambient;
+  //
+  // Two rooms modulate the dial. The derelict's supply fails for a frame or
+  // two at a time on a hashed stutter — deterministic, so a replayed frame
+  // flickers identically. The crucible breathes on a slow sine, which changes
+  // nothing about the fight and everything about how it photographs.
+  let amb = theme.ambient;
+  if (theme.flicker > 0) {
+    const n = frac(Math.sin(Math.floor(game.clock * 24) * 12.9898) * 43758.5453);
+    if (n < 0.09) amb *= 1 - theme.flicker * (0.35 + 0.6 * (n / 0.09));
+  }
+  if (theme.pulse > 0) {
+    amb *= 1 - theme.pulse * (0.5 + 0.5 * Math.sin(game.clock * 0.8)) * 0.34;
+  }
   const minor = GRID * theme.gridStep;
   const major = PLATE * theme.gridStep;
 

@@ -50,12 +50,19 @@ export interface SectorTheme {
   /**
    * The substructure under the grid. `panel` is the machined bay the range is
    * built from; `grate` swaps its chamfer for parallel bars, which reads as a
-   * floor you could drop something through; `none` removes the pass and takes
+   * floor you could drop something through; `tile` is small uniform squares
+   * with no recesses, a clean-room floor; `none` removes the pass and takes
    * the room's second scale with it.
    */
-  plates: 'panel' | 'grate' | 'none';
-  /** Painted floor markings: the survey range's, or an unmarked floor. */
-  etch: 'range' | 'none';
+  plates: 'panel' | 'grate' | 'tile' | 'none';
+  /**
+   * Painted floor markings. `range` is the survey court — centre circle,
+   * registration crosses, an arena ID. `derelict` is what a working bay
+   * paints: keep-clear chevrons and a stencilled bay number. `none` is bare.
+   */
+  etch: 'range' | 'derelict' | 'none';
+  /** The text stencilled bottom-right. The floor names the place. */
+  stamp: string;
   /** 1 = the 62-unit survey grid; 2 doubles it, and the room changes rhythm. */
   gridStep: 1 | 2;
   /** The radar sweep. Diegetic — the floor says AFB RECORDER LIVE. */
@@ -66,11 +73,21 @@ export interface SectorTheme {
   dustRise: boolean;
   /**
    * The surround beyond the arena. `strata` is the range's two families of
-   * drifting hairline; `void` is nothing at all, which is not laziness — a
-   * dark room whose surround still has visible structure reads as a lit room
-   * someone turned the brightness down on.
+   * drifting hairline; `lattice` trades the diagonals for a slow orthogonal
+   * wireframe; `stormfront` is soft masses of the room's own light drifting
+   * past; `void` is nothing at all, which is not laziness — a dark room whose
+   * surround still has visible structure reads as a lit room someone turned
+   * the brightness down on.
    */
-  backdrop: 'strata' | 'void';
+  backdrop: 'strata' | 'lattice' | 'stormfront' | 'void';
+  /**
+   * 0..1: how badly the room's lighting is failing. A flickering grid is the
+   * cheapest cinematography there is — it turns a floor into a place with an
+   * electrical system, and an electrical system into a thing that is wrong.
+   */
+  flicker: number;
+  /** 0..1: the room's light breathing on a slow cycle. The finale wears this. */
+  pulse: number;
 
   // ------------------------------------------------------------ lighting
   /**
@@ -114,7 +131,7 @@ export interface SectorTheme {
  * compile error until the room it names has actually been built — the same
  * pressure `Record<EnemyKind, T>` applies eight times over in the game.
  */
-export type SectorId = 'range' | 'blackout' | 'foundry';
+export type SectorId = 'range' | 'blackout' | 'foundry' | 'lattice' | 'derelict' | 'crucible';
 
 export const SECTORS: Record<SectorId, SectorTheme> = {
   /**
@@ -136,11 +153,14 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     plateSeed: 0,
     plates: 'panel',
     etch: 'range',
+    stamp: 'ARENA 062',
     gridStep: 1,
     sweep: true,
     dust: 1,
     dustRise: false,
     backdrop: 'strata',
+    flicker: 0,
+    pulse: 0,
     ambient: 1,
     lightR: 1,
     hazeCol: COL.grid,
@@ -176,11 +196,14 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     plateSeed: 11,
     plates: 'none',
     etch: 'none',
+    stamp: 'AUX POWER ONLY',
     gridStep: 1,
     sweep: false,
     dust: 0.3,
     dustRise: false,
     backdrop: 'void',
+    flicker: 0,
+    pulse: 0,
     ambient: 0.12,
     lightR: 1.35,
     hazeCol: COL.grid,
@@ -213,11 +236,14 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     plateSeed: 3,
     plates: 'grate',
     etch: 'range',
+    stamp: 'PROCESS DECK 3',
     gridStep: 1,
     sweep: false,
     dust: 1.6,
     dustRise: true,
     backdrop: 'strata',
+    flicker: 0,
+    pulse: 0,
     ambient: 0.86,
     lightR: 1,
     // Deep red rather than the obvious furnace orange, and turned well down
@@ -231,6 +257,118 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeAmt: 1.05,
     bodyFalloff: 0,
     terrain: 'shutters',
+  },
+
+  /**
+   * Cold, precise, and at double scale.
+   *
+   * The doubled grid is the whole trick. Every other dial here is a shade of
+   * blue, but a survey grid at twice the pitch changes the room's rhythm the
+   * way a change of time signature changes a piece — same materials, and you
+   * would never mistake one for the other. Dense pillars because this is the
+   * sector about the line being cut: a lattice you strike through, in a room
+   * that is itself a lattice.
+   */
+  lattice: {
+    id: 'lattice',
+    name: 'THE LATTICE',
+    brief: 'Calibration architecture. Still calibrating.',
+    void: [5, 7, 15],
+    floor: [10, 14, 27],
+    grid: [58, 92, 190],
+    gridHot: [122, 170, 255],
+    wall: [156, 186, 240],
+    plateSeed: 7,
+    plates: 'tile',
+    etch: 'none',
+    stamp: 'GRID REF 2X',
+    gridStep: 2,
+    sweep: true,
+    dust: 0.7,
+    dustRise: false,
+    backdrop: 'lattice',
+    flicker: 0,
+    pulse: 0,
+    ambient: 1,
+    lightR: 1,
+    hazeCol: [58, 92, 190],
+    hazeAmt: 0.8,
+    bodyFalloff: 0,
+    terrain: 'pillars',
+  },
+
+  /**
+   * Nothing here has been maintained in a long time.
+   *
+   * Desaturated to the edge of monochrome, with one amber exception, and lit
+   * by a supply that is failing: the grid drops out for a frame or two at a
+   * time on a deterministic stutter. A flickering room is the cheapest
+   * cinematography in the catalogue — it says *electrical system*, and then
+   * it says *wrong* — and it costs a hash and a multiply.
+   */
+  derelict: {
+    id: 'derelict',
+    name: 'THE DERELICT',
+    brief: 'Decommissioned. Incompletely.',
+    void: [7, 8, 10],
+    floor: [15, 16, 19],
+    grid: [52, 56, 63],
+    gridHot: [216, 160, 72],
+    wall: [140, 146, 156],
+    plateSeed: 19,
+    plates: 'panel',
+    etch: 'derelict',
+    stamp: 'BAY 07 CONDEMNED',
+    gridStep: 1,
+    sweep: false,
+    dust: 0.8,
+    dustRise: false,
+    backdrop: 'void',
+    flicker: 0.7,
+    pulse: 0,
+    ambient: 0.55,
+    lightR: 1.1,
+    hazeCol: [90, 100, 120],
+    hazeAmt: 0.8,
+    bodyFalloff: 0,
+    terrain: 'none',
+  },
+
+  /**
+   * The finale. The room breathes.
+   *
+   * Everything is red and the light swells and dies on a slow cycle, which is
+   * the one trick in this file that is pure theatre — it changes nothing about
+   * the fight and everything about how the fight photographs. No terrain: the
+   * last room is a clean duel floor, because by now the player has earned a
+   * fight where the only thing in the way is the thing they came to kill.
+   */
+  crucible: {
+    id: 'crucible',
+    name: 'THE CRUCIBLE',
+    brief: 'This is where they test what survives.',
+    void: [13, 4, 6],
+    floor: [27, 9, 12],
+    grid: [112, 36, 42],
+    gridHot: [255, 96, 84],
+    wall: [235, 122, 112],
+    plateSeed: 23,
+    plates: 'panel',
+    etch: 'range',
+    stamp: 'PROVING GROUND',
+    gridStep: 1,
+    sweep: true,
+    dust: 1.2,
+    dustRise: true,
+    backdrop: 'stormfront',
+    flicker: 0,
+    pulse: 0.6,
+    ambient: 0.92,
+    lightR: 1,
+    hazeCol: [220, 52, 40],
+    hazeAmt: 1.1,
+    bodyFalloff: 0,
+    terrain: 'none',
   },
 };
 
