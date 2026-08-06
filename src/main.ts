@@ -36,6 +36,23 @@ const input = new Input(canvas);
 const game = new Game(input);
 
 /**
+ * `?seed=xxx` starts a run on a shared seed, and `?daily` on today's.
+ *
+ * The point of a seeded run is that two people can play the same one, and a
+ * seed nobody can pass on is only half the feature — so the URL is the share
+ * format. Base 36 to keep it short enough to type out loud.
+ */
+const params = new URLSearchParams(location.search);
+if (params.has('seed') || params.has('daily')) {
+  const raw = params.get('seed');
+  const seed = raw ? parseInt(raw, 36) >>> 0 : Game.dailySeed();
+  if (Number.isFinite(seed)) {
+    game.arm();
+    game.start({ seed, daily: !raw });
+  }
+}
+
+/**
  * Fixed 120Hz simulation regardless of display refresh, so strike timing,
  * collision and feel are identical on a 60Hz laptop and a 240Hz monitor.
  */

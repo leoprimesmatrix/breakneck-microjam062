@@ -33,7 +33,18 @@ import { Audio } from '../engine/audio';
 import { camera } from '../engine/camera';
 import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
-import { TAU, clamp, clamp01, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
+import {
+  TAU,
+  clamp,
+  clamp01,
+  damp,
+  dampAngle,
+  dayStamp,
+  makeRng,
+  randRange,
+  seedFrom,
+  type Rng,
+} from '../engine/math';
 import { Particles } from '../engine/particles';
 import { SECTOR_ORDER, SECTOR_WAVES, SECTORS, setSector, setWardenLap, theme } from '../sectors';
 import type { UiHit } from '../settings';
@@ -90,6 +101,9 @@ const WAVE_KEY = 'afterburn.wave.v1';
 const RUNS_KEY = 'afterburn.runs.v1';
 /** Furthest sector index reached. The whole save format is still integers. */
 const SECT_KEY = 'afterburn.sector.v1';
+/** Today's best on the daily seed, and which day that was. Still two integers. */
+const DAILY_KEY = 'afterburn.daily.v1';
+const DAILY_DAY_KEY = 'afterburn.dailyday.v1';
 
 /** The longer pause a sector boundary earns, with the chapter card inside it. */
 const SECTOR_BREATHER = 3.4;
@@ -201,6 +215,26 @@ export class Game {
   /** Furthest sector index ever reached, for the title's CONTINUE row. */
   furthest = 0;
 
+  /**
+   * The seed this run is being generated from, and whether it is *the* seed.
+   *
+   * `makeRng` is mulberry32 and its doc comment has said "so runs can be
+   * reproduced while tuning" since the jam — but nothing ever seeded it. Both
+   * call sites drew fresh entropy, the seed was never stored, never shown and
+   * never settable, so the one property the generator was chosen for had never
+   * once been used. Every run was unrepeatable and no two players could ever
+   * be given the same one.
+   *
+   * The rng already drives terrain, spawn positions, every enemy's seed, roll
+   * and initial timer, and the endless composition — so seeding those two call
+   * sites is the entire feature.
+   */
+  seed = 0;
+  daily = false;
+  /** Best score on today's seed, and the day it belongs to. */
+  dailyBest = 0;
+  dailyDay = '';
+
   /** Live preview of the strike the player is currently lining up. */
   aim: StrikePlan | null = null;
   aimAngle = -Math.PI / 2;
@@ -250,6 +284,10 @@ export class Game {
     this.bestWave = this.load(WAVE_KEY);
     this.runs = this.load(RUNS_KEY);
     this.furthest = Math.min(this.load(SECT_KEY), SECTOR_ORDER.length - 1);
+    // Yesterday's best is not today's. The stored day is what makes the daily
+    // board reset itself without any clock arithmetic at read time.
+    this.dailyDay = this.loadText(DAILY_DAY_KEY);
+    this.dailyBest = this.dailyDay === dayStamp() ? this.load(DAILY_KEY) : 0;
     this.player.reset();
     this.beginAttract();
     // The cold open does *not* fire here. See `arm`.
@@ -322,6 +360,27 @@ export class Game {
     } catch {
       /* private browsing — never worth failing a run over */
     }
+  }
+
+  private loadText(key: string) {
+    try {
+      return localStorage.getItem(key) ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  private saveText(key: string, v: string) {
+    try {
+      localStorage.setItem(key, v);
+    } catch {
+      /* as above */
+    }
+  }
+
+  /** The seed everyone playing today gets. */
+  static dailySeed(day = dayStamp()) {
+    return seedFrom(`afterburn/${day}`);
   }
 
   get rank() {
@@ -428,8 +487,12 @@ export class Game {
     };
   }
 
-  start(opts: { sector?: number; endless?: boolean } = {}) {
+  start(opts: { sector?: number; endless?: boolean; seed?: number; daily?: boolean } = {}) {
     this.endless = opts.endless ?? false;
+    this.daily = opts.daily ?? false;
+    // A daily run is a fixed seed and nothing else — same rooms, same layouts,
+    // same arrivals, for everybody, all day.
+    this.seed = opts.seed ?? (this.daily ? Game.dailySeed() : (Math.random() * 0xffffffff) >>> 0);
     this.startIx = clamp(opts.sector ?? 0, 0, SECTOR_ORDER.length - 1);
     this.sectorIx = this.startIx;
     this.won = false;
@@ -441,7 +504,7 @@ export class Game {
     // also asks for its track, which lands whenever the queue next buffers.
     this.audio.onSector(theme);
     if (this.startIx > 0) this.audio.tracks.request(theme.track);
-    this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
+    this.rng = makeRng(this.seed);
     this.player.reset();
     this.swarm.reset();
     this.particles.reset();
@@ -585,6 +648,20 @@ export class Game {
       this.bestWave = this.wave;
       this.save(WAVE_KEY, this.bestWave);
     }
+    // The daily keeps its own board, because comparing a fixed seed against an
+    // all-time best set on some other seed is not a comparison of anything.
+    if (this.daily) {
+      const day = dayStamp();
+      if (this.dailyDay !== day) {
+        this.dailyDay = day;
+        this.dailyBest = 0;
+        this.saveText(DAILY_DAY_KEY, day);
+      }
+      if (this.score > this.dailyBest) {
+        this.dailyBest = this.score;
+        this.save(DAILY_KEY, this.dailyBest);
+      }
+    }
   }
 
   // -------------------------------------------------------------------- loop
@@ -657,6 +734,7 @@ export class Game {
         const mode = hit.id.slice(3);
         if (mode === 'continue') this.start({ sector: this.furthest });
         else if (mode === 'endless') this.start({ endless: true });
+        else if (mode === 'daily') this.start({ daily: true });
       }
       this.audio.onUiMove();
       input.takeConfirm();

@@ -42,5 +42,26 @@ export function makeRng(seed: number) {
 
 export type Rng = () => number;
 
+/**
+ * FNV-1a over a string, for turning a date — or a code someone pasted to a
+ * friend — into a seed. Small, stable, and identical in every browser, which
+ * is the only property that matters when two people are meant to be playing
+ * the same run.
+ */
+export function seedFrom(s: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** Local calendar day as `YYYY-MM-DD`. The daily run's identity. */
+export function dayStamp(d = new Date()) {
+  const p = (n: number) => `${n}`.padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export const randRange = (rng: Rng, lo: number, hi: number) => lo + rng() * (hi - lo);
 

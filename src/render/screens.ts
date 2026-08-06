@@ -743,6 +743,11 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
           label: `CONTINUE  ·  SECTOR ${ROMAN[game.furthest]} ${SECTORS[SECTOR_ORDER[game.furthest]].name}`,
         });
       }
+      // One fixed seed a day, the same for everyone who opens the game today.
+      modes.push({
+        id: 'go:daily',
+        label: game.dailyBest > 0 ? `DAILY RUN  ·  BEST ${game.dailyBest}` : 'DAILY RUN',
+      });
       modes.push({ id: 'go:endless', label: 'ENDLESS MODE' });
       let my = promptY + 52 * S;
       for (const m of modes) {
@@ -1012,6 +1017,12 @@ function drawResults(ctx: CanvasRenderingContext2D, game: Game) {
     ['BEST STRIKE', game.bestMulti > 1 ? `${game.bestMulti} KILLS` : '-'],
     ['TIME ELAPSED', formatTime(game.runTime)],
   ];
+  // A daily run is only worth anything if you can prove which one you played,
+  // so the seed goes on the card where a screenshot will carry it.
+  if (game.daily) {
+    stats.push(["TODAY'S BEST", `${game.dailyBest}`]);
+    stats.push(['SEED', game.seed.toString(36).toUpperCase()]);
+  }
   const tableY = top + 196 * S;
   const rowH = 33 * S;
   const halfW = Math.min(205 * S, view.w * 0.44);
