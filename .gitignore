@@ -10,4 +10,9 @@ node_modules/
 # copy that actually shipped — that one is committed.
 dist/
 
+# Where the render pipeline drops preview stills while a sequence is being
+# staged. The finished mp4s and gifs land in promo/ and are committed; these are
+# the hundreds of frames you look at once on the way there.
+promo/titlecard2/tmp/
+
 .DS_Store

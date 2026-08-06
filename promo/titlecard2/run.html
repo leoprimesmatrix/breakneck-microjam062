@@ -1,0 +1,114 @@
+<!doctype html>
+<!--
+  Harness for the titlecard v2 renders. Serve the repo with serve.ps1, open
+  http://localhost:8788/ and drive everything from the console (or let the
+  buttons do it). Nothing here ships in the game bundle.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<title>AFTERBURN titlecard2</title>
+<style>
+  body { margin: 0; background: #06070b; color: #e8f0fa; font: 13px/1.5 monospace; }
+  #bar { padding: 8px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button { background: #101621; color: #9cf0ff; border: 1px solid #2a344c; padding: 4px 10px; font: inherit; cursor: pointer; }
+  #log { padding: 0 12px 8px; white-space: pre-wrap; color: #7c8aa4; }
+  #view { width: 960px; height: 540px; display: block; margin: 0 12px 12px; border: 1px solid #2a344c; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span>AFTERBURN titlecard2</span>
+  <button onclick="TC.show(0.25)">t=0.25</button>
+  <button onclick="TC.show(1.0)">t=1.0</button>
+  <button onclick="TC.show(3.0)">t=3.0</button>
+  <button onclick="TC.show('lock')">lock</button>
+  <button onclick="TC.show('end')">end</button>
+</div>
+<div id="log">loading…</div>
+<canvas id="view" width="1920" height="1080"></canvas>
+<script type="module">
+  const log = (m) => { document.getElementById('log').textContent = String(m); };
+  window.__status = { phase: 'boot' };
+  try {
+    const feat = {
+      videoEncoder: typeof VideoEncoder !== 'undefined',
+      avc: null,
+      offscreen: typeof OffscreenCanvas !== 'undefined',
+    };
+    if (feat.videoEncoder) {
+      const sup = await VideoEncoder.isConfigSupported({
+        codec: 'avc1.640028', width: 1920, height: 1080,
+        bitrate: 10_000_000, framerate: 60,
+      });
+      feat.avc = sup.supported;
+    }
+    window.__feat = feat;
+    window.__status = { phase: 'idle', feat };
+    log('features: ' + JSON.stringify(feat));
+
+    const seq = await import('./seq.mjs' + location.search).catch((e) => {
+      log('seq.mjs not loaded yet (' + e.message + ') — feature probe only.');
+      return null;
+    });
+    if (seq) {
+      const view = document.getElementById('view');
+      const g = view.getContext('2d');
+      window.TC = {
+        seq,
+        show(t) {
+          if (t === 'lock') t = seq.marks.LOCK + 0.02;
+          if (t === 'end') t = seq.DURATION - 0.7;
+          seq.frame(g, t);
+          log('t=' + (+t).toFixed(2) + '  variant=' + seq.VARIANT + '  ' + JSON.stringify(seq.marks));
+        },
+        /** POST a PNG of arbitrary times to the sink as one contact sheet per time. */
+        async still(times, prefix = 'still') {
+          for (const t of times) {
+            this.show(t);
+            const blob = await new Promise((r) => view.toBlob(r, 'image/png'));
+            await fetch('/save?name=' + prefix + '-' + String(Math.round(t * 100)).padStart(4, '0') + '.png&dir=tmp', { method: 'POST', body: blob });
+          }
+          return 'stills saved';
+        },
+      };
+      window.__status = { phase: 'ready', feat, marks: seq.marks, variant: seq.VARIANT };
+      log('ready  variant=' + seq.VARIANT + '  ' + JSON.stringify(seq.marks));
+      TC.show(seq.marks.LOCK + 0.02);
+    }
+
+    /** Full render of the story trailer (mp4 only, ~90s). Poll window.__prog. */
+    window.RUNFULL = async (opts = {}) => {
+      const tv = await import('./trailer.mjs');
+      const enc = await import('./encode.mjs');
+      return enc.encodeVariant(tv, 'trailer', { gif: false, bitrate: 9_000_000, ...opts });
+    };
+
+    /** Full render of the teaser (mp4 only) to promo/. Poll window.__prog. */
+    window.RUNT = async (v, opts = {}) => {
+      const names = { soon: 'teaser-coming-soon', date: 'teaser-august-2026' };
+      const tv = await import('./teaser.mjs?v=' + v);
+      const enc = await import('./encode.mjs');
+      return enc.encodeVariant(tv, names[v], { gif: false, ...opts });
+    };
+
+    /** Full render of one variant to promo/: mp4 + gif. Poll window.__prog. */
+    window.RUNV = async (v, opts = {}) => {
+      const names = {
+        plain: 'title-anim-v2',
+        soon: 'title-coming-soon',
+        date: 'title-august-2026',
+        shipsoon: 'title-ship-coming-soon',
+        shipdate: 'title-ship-august-2026',
+      };
+      const sv = await import('./seq.mjs?v=' + v);
+      const enc = await import('./encode.mjs');
+      return enc.encodeVariant(sv, names[v], opts);
+    };
+  } catch (e) {
+    window.__status = { phase: 'error', error: String(e && e.stack || e) };
+    log('BOOT ERROR: ' + (e && e.stack || e));
+  }
+</script>
+</body>
+</html>
