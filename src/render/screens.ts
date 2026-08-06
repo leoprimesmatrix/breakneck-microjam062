@@ -2,6 +2,7 @@ import { COL, rgba } from '../config';
 import { angleDelta, clamp, clamp01, easeOutCubic, easeOutExpo, easeOutQuint } from '../engine/math';
 import { ENEMY_COL, RANKS, pad, type Game } from '../game/game';
 import { SPECS } from '../game/enemies';
+import { ROMAN, SECTOR_ORDER, SECTORS } from '../sectors';
 import { view } from '../viewport';
 import { drawRadial, flareSprite } from './glow';
 import { drawEnemyIcon, group } from './hud';
@@ -728,6 +729,44 @@ function drawTitle(ctx: CanvasRenderingContext2D, game: Game) {
       },
     );
     ctx.restore();
+
+    // --- the other ways in. Two quiet rows under the main prompt: continue
+    //     from the furthest sector reached, and the endless mode the game
+    //     used to *be*. Buttons rather than keybindings, through the same
+    //     immediate-mode hit list the settings panel uses; drawn only at full
+    //     prompt strength so the cold open is never cluttered.
+    if (pp > 0.9) {
+      const modes: { id: string; label: string }[] = [];
+      if (game.furthest > 0) {
+        modes.push({
+          id: 'go:continue',
+          label: `CONTINUE  ·  SECTOR ${ROMAN[game.furthest]} ${SECTORS[SECTOR_ORDER[game.furthest]].name}`,
+        });
+      }
+      modes.push({ id: 'go:endless', label: 'ENDLESS MODE' });
+      let my = promptY + 52 * S;
+      for (const m of modes) {
+        const w = uiWidth(ctx, m.label, { size: 10.5 * S, weight: 700, tracking: 2.2 * S }) + 36 * S;
+        const box = { id: m.id, x: cx - w * 0.5, y: my - 13 * S, w, h: 26 * S };
+        const hot = game.input.pointerActive &&
+          game.input.cursorScreenX() >= box.x && game.input.cursorScreenX() <= box.x + box.w &&
+          game.input.cursorScreenY() >= box.y && game.input.cursorScreenY() <= box.y + box.h;
+        ctx.fillStyle = rgba(COL.strike, hot ? 0.16 : 0.05);
+        ctx.fillRect(box.x, box.y, box.w, box.h);
+        ctx.strokeStyle = rgba(COL.strike, hot ? 0.7 : 0.22);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1);
+        drawUI(ctx, m.label, cx, my + 3.5 * S, {
+          size: 10.5 * S,
+          weight: 700,
+          tracking: 2.2 * S,
+          align: 'center',
+          color: rgba(hot ? COL.ink : COL.dim, 0.95),
+        });
+        game.uiHits.push(box);
+        my += 34 * S;
+      }
+    }
   }
 
   // --- colophon. Small print grounds a title screen in a real occasion the
@@ -896,15 +935,17 @@ function drawResults(ctx: CanvasRenderingContext2D, game: Game) {
 
   scrim(ctx, 0.82 * stage(t, 0.15, 0.8));
 
-  // --- headline
+  // --- headline. Victory and death share the whole screen apart from this
+  //     line and its colour — the stats mean the same thing either way, and a
+  //     separate victory layout would be a second screen to keep honest.
   ctx.save();
   ctx.globalAlpha = stage(t, 0.3, 0.5);
-  drawUI(ctx, 'RUN ENDED', cx, top, {
+  drawUI(ctx, game.won ? 'ALL SECTORS CLEAR' : 'RUN ENDED', cx, top, {
     size: 12 * S,
     weight: 700,
     tracking: 6 * S,
     align: 'center',
-    color: rgba(COL.danger, 0.9),
+    color: rgba(game.won ? COL.hull : COL.danger, 0.9),
   });
   ctx.restore();
 

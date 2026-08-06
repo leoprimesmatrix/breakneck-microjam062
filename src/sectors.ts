@@ -1,4 +1,5 @@
 import { COL, type RGB } from './config';
+import type { EnemyKind } from './game/enemies';
 
 /**
  * The room, as data.
@@ -123,6 +124,13 @@ export interface SectorTheme {
    * to be set with the fight in mind rather than the photograph.
    */
   terrain: 'none' | 'pillars' | 'shutters';
+  /**
+   * What the procedural generator may spawn here once the authored campaign
+   * is behind the player. A type-only import, so this stays a data file with
+   * no runtime edge into `game/`. Wardens are never on the menu — bosses are
+   * appointments, not random encounters.
+   */
+  roster: readonly EnemyKind[];
 }
 
 /**
@@ -167,6 +175,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeAmt: 1,
     bodyFalloff: 0,
     terrain: 'none',
+    roster: ['mote', 'seeder', 'ward'],
   },
 
   /**
@@ -213,6 +222,8 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     // sharper: cover you cannot see until you are beside it, and a preview
     // line that is the only thing telling you it is there.
     terrain: 'pillars',
+    // The choir glows in the dark, which is the best room in the game for it.
+    roster: ['mote', 'seeder', 'ward', 'choir'],
   },
 
   /**
@@ -257,6 +268,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeAmt: 1.05,
     bodyFalloff: 0,
     terrain: 'shutters',
+    roster: ['mote', 'lancer', 'spine', 'bulwark'],
   },
 
   /**
@@ -295,6 +307,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeAmt: 0.8,
     bodyFalloff: 0,
     terrain: 'pillars',
+    roster: ['mote', 'seeder', 'ward', 'lancer', 'spine'],
   },
 
   /**
@@ -332,6 +345,7 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeAmt: 0.8,
     bodyFalloff: 0,
     terrain: 'none',
+    roster: ['mote', 'seeder', 'choir', 'bulwark', 'lancer'],
   },
 
   /**
@@ -369,8 +383,22 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     hazeAmt: 1.1,
     bodyFalloff: 0,
     terrain: 'none',
+    roster: ['mote', 'seeder', 'ward', 'lancer', 'spine', 'bulwark', 'choir'],
   },
 };
+
+/**
+ * The campaign's spine: which room follows which, and how many waves each
+ * holds. Six sectors of four is a run a good player finishes in twenty
+ * minutes, every fourth wave is a warden, and endless mode walks the same
+ * ring forever, hotter each lap.
+ */
+export const SECTOR_ORDER: readonly SectorId[] = [
+  'range', 'blackout', 'foundry', 'lattice', 'derelict', 'crucible',
+];
+export const SECTOR_WAVES = 4;
+/** Chapter numerals for the cards and the title's continue row. */
+export const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 
 /**
  * Each sector's warden: how many armour plates its ring carries and how fast

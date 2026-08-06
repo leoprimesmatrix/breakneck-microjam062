@@ -9,11 +9,11 @@ import {
 import { clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine/math';
 import { SPECS, type EnemyKind } from '../game/enemies';
 import { ENEMY_COL, pad, type Game } from '../game/game';
-import { WARDEN_DEF, theme } from '../sectors';
+import { ROMAN, SECTOR_ORDER, SECTOR_WAVES, SECTORS, WARDEN_DEF, theme } from '../sectors';
 import { view } from '../viewport';
 import { drawEnemyPortrait } from './bodies';
 import { active } from './glow';
-import { IS_TOUCH, drawUI, drawVec, uiWidth, vecWidth } from './text';
+import { IS_TOUCH, drawUI, drawVec, fitVec, uiWidth, vecWidth } from './text';
 
 /**
  * The HUD is drawn in *screen* pixels, after post-processing, and it lives in
@@ -78,6 +78,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, game: Game) {
     // middle of the arena, and a card printed over the ship hides the one thing
     // the tutorial is pointing at.
     drawWaveCard(ctx, game, cx, T + (B - T) * 0.3, S);
+    drawSectorCard(ctx, game, cx, T + (B - T) * 0.34, S);
   }
 }
 
@@ -333,7 +334,7 @@ function drawTutorial(ctx: CanvasRenderingContext2D, game: Game, S: number) {
   // The wave card owns the centre of the screen while it is up, and on wave one
   // the player is standing in the centre — so these two would print on top of
   // each other at exactly the moment a first-time player is reading.
-  if (game.waveCard > 0) return;
+  if (game.waveCard > 0 || game.sectorCard > 0) return;
   const p = game.player;
   // Clamped into the frame: a strike can end with the ship against a wall, and
   // a prompt half off the screen is worse than no prompt at all.
@@ -523,6 +524,58 @@ function drawWaveCard(ctx: CanvasRenderingContext2D, game: Game, cx: number, cy:
       color: rgba(COL.focus, 0.9),
     });
   }
+  ctx.restore();
+}
+
+// --------------------------------------------------------------- sector card
+/**
+ * The chapter card, up while the breather crosses a sector boundary. It holds
+ * through the room swap — the flash fires under it at the halfway mark — so
+ * the cut lands as "the card announced a place and the place arrived", which
+ * is a scene change, not a loading screen.
+ */
+function drawSectorCard(ctx: CanvasRenderingContext2D, game: Game, cx: number, cy: number, S: number) {
+  if (game.sectorCard <= 0) return;
+  const t = 1 - game.sectorCard / 3.4;
+  const inA = easeOutQuint(clamp01(t * 3));
+  const outA = t > 0.8 ? 1 - (t - 0.8) / 0.2 : 1;
+  const a = inA * outA;
+  if (a <= 0.002) return;
+
+  // Announcing the wave *after* this breather: wave `game.wave` just cleared.
+  const slot = Math.floor(game.wave / SECTOR_WAVES) % SECTOR_ORDER.length;
+  const name = SECTORS[SECTOR_ORDER[slot]].name;
+  const brief = SECTORS[SECTOR_ORDER[slot]].brief;
+  const y = cy - 30 * S;
+
+  ctx.save();
+  ctx.globalAlpha = a;
+  drawUI(ctx, `SECTOR ${ROMAN[slot]}`, cx, y - 46 * S, {
+    size: 12 * S,
+    weight: 700,
+    tracking: 7 * S,
+    align: 'center',
+    color: rgba(COL.dim, 0.9),
+  });
+  drawVec(ctx, name, cx, y, {
+    size: fitVec(name, view.w * 0.86, 58 * S, 0.16),
+    weight: 0.11,
+    tracking: 0.16,
+    align: 'center',
+    baseline: 'mid',
+    color: rgba(COL.ink, 1),
+    glow: 1.6,
+    glowColor: rgba(COL.strike, 1),
+    slant: 0.06,
+    progress: clamp01(t * 2.6),
+  });
+  drawUI(ctx, brief, cx, y + 52 * S, {
+    size: 12 * S,
+    weight: 600,
+    tracking: 2.6 * S,
+    align: 'center',
+    color: rgba(COL.focus, 0.85),
+  });
   ctx.restore();
 }
 

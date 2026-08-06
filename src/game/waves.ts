@@ -1,5 +1,6 @@
 import { SPAWN_TELEGRAPH } from '../config';
 import { randRange, type Rng } from '../engine/math';
+import { SECTOR_WAVES, theme, type SectorId } from '../sectors';
 import { view } from '../viewport';
 import type { EnemyKind, Swarm } from './enemies';
 import { terrain } from './terrain';
@@ -7,10 +8,12 @@ import { terrain } from './terrain';
 /**
  * The wave director.
  *
- * Hand-authored for the first twelve waves, procedural after that. The authored
+ * Hand-authored for the whole campaign — six sectors of four waves, every
+ * fourth a warden — then procedural for endless laps beyond it. The authored
  * stretch exists purely to control the *order in which ideas arrive*: one new
- * enemy at a time, each on its own wave, each with a breather before the wave
- * that combines it with everything before it. A random generator cannot teach.
+ * enemy at a time, each introduced in the room that shows it off best, each
+ * with a breather before the wave that combines it with everything before it.
+ * A random generator cannot teach.
  */
 
 export interface WaveDef {
@@ -22,141 +25,254 @@ export interface WaveDef {
   title?: string;
 }
 
-const SCRIPT: WaveDef[] = [
-  {
-    title: 'FIRST LIGHT',
-    speedMul: 0.78,
-    groups: [{ kind: 'mote', count: 3, at: 0 }, { kind: 'mote', count: 2, at: 3.2 }],
-  },
-  {
-    title: 'SWARM',
-    speedMul: 0.86,
-    groups: [{ kind: 'mote', count: 4, at: 0 }, { kind: 'mote', count: 4, at: 2.6 }],
-  },
-  {
-    title: 'BLOOM',
-    speedMul: 0.9,
-    groups: [
-      { kind: 'seeder', count: 2, at: 0 },
-      { kind: 'mote', count: 3, at: 1.8 },
-      { kind: 'seeder', count: 1, at: 4.4 },
-    ],
-  },
-  {
-    title: 'THE WALL',
-    speedMul: 0.94,
-    groups: [
-      { kind: 'ward', count: 2, at: 0 },
-      { kind: 'mote', count: 4, at: 2.4 },
-    ],
-  },
-  {
-    title: 'CROSSFIRE',
-    speedMul: 0.98,
-    groups: [
-      { kind: 'mote', count: 4, at: 0 },
-      { kind: 'ward', count: 2, at: 1.6 },
-      { kind: 'seeder', count: 2, at: 3.8 },
-    ],
-  },
-  {
-    title: 'THE LINE',
-    speedMul: 1,
-    groups: [
-      { kind: 'lancer', count: 2, at: 0 },
-      { kind: 'mote', count: 4, at: 2.6 },
-    ],
-  },
-  {
-    title: 'PINCER',
-    speedMul: 1.04,
-    groups: [
-      { kind: 'lancer', count: 2, at: 0 },
-      { kind: 'ward', count: 2, at: 1.4 },
-      { kind: 'mote', count: 5, at: 3.4 },
-    ],
-  },
-  {
-    title: 'BATTERY',
-    speedMul: 1.06,
-    groups: [
-      { kind: 'spine', count: 2, at: 0 },
-      { kind: 'mote', count: 5, at: 2.2 },
-      { kind: 'seeder', count: 2, at: 4.6 },
-    ],
-  },
-  {
-    title: 'HORNETS',
-    speedMul: 1.1,
-    groups: [
-      { kind: 'mote', count: 6, at: 0 },
-      { kind: 'lancer', count: 2, at: 2.2 },
-      { kind: 'spine', count: 1, at: 3.8 },
-      { kind: 'ward', count: 2, at: 5.2 },
-    ],
-  },
-  {
-    title: 'GAUNTLET',
-    speedMul: 1.14,
-    groups: [
-      { kind: 'ward', count: 3, at: 0 },
-      { kind: 'seeder', count: 3, at: 2 },
-      { kind: 'lancer', count: 2, at: 4 },
-      { kind: 'mote', count: 6, at: 5.6 },
-    ],
-  },
-  {
-    title: 'ARTILLERY',
-    speedMul: 1.18,
-    groups: [
-      { kind: 'spine', count: 3, at: 0 },
-      { kind: 'mote', count: 6, at: 1.8 },
-      { kind: 'lancer', count: 3, at: 4 },
-    ],
-  },
-  {
-    title: 'MERIDIAN',
-    speedMul: 1.22,
-    groups: [
-      { kind: 'mote', count: 8, at: 0 },
-      { kind: 'ward', count: 3, at: 2.2 },
-      { kind: 'seeder', count: 3, at: 4 },
-      { kind: 'lancer', count: 3, at: 5.6 },
-      { kind: 'spine', count: 2, at: 7 },
-    ],
-  },
-];
+const SCRIPT: Record<SectorId, WaveDef[]> = {
+  // The survey range: the original opening, ending on the gentlest warden.
+  range: [
+    {
+      title: 'FIRST LIGHT',
+      speedMul: 0.78,
+      groups: [{ kind: 'mote', count: 3, at: 0 }, { kind: 'mote', count: 2, at: 3.2 }],
+    },
+    {
+      title: 'SWARM',
+      speedMul: 0.86,
+      groups: [{ kind: 'mote', count: 4, at: 0 }, { kind: 'mote', count: 4, at: 2.6 }],
+    },
+    {
+      title: 'BLOOM',
+      speedMul: 0.9,
+      groups: [
+        { kind: 'seeder', count: 2, at: 0 },
+        { kind: 'mote', count: 3, at: 1.8 },
+        { kind: 'seeder', count: 1, at: 4.4 },
+      ],
+    },
+    {
+      title: 'THE FIRST WARDEN',
+      speedMul: 0.94,
+      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'mote', count: 3, at: 7 }],
+    },
+  ],
 
-/** Names for the endless stretch, so wave 27 still gets a title card. */
+  // The dark. The ward arrives here, where its shield arc is easiest to read
+  // (it is the brightest thing near it), and the choir sings where it glows.
+  blackout: [
+    {
+      title: 'LIGHTS OUT',
+      speedMul: 0.9,
+      groups: [{ kind: 'mote', count: 5, at: 0 }, { kind: 'mote', count: 3, at: 3 }],
+    },
+    {
+      title: 'VOICES',
+      speedMul: 0.95,
+      groups: [
+        { kind: 'choir', count: 1, at: 0 },
+        { kind: 'mote', count: 4, at: 2.2 },
+        { kind: 'seeder', count: 1, at: 4.6 },
+      ],
+    },
+    {
+      title: 'THE WALL',
+      speedMul: 1,
+      groups: [
+        { kind: 'ward', count: 2, at: 0 },
+        { kind: 'choir', count: 1, at: 2.4 },
+        { kind: 'mote', count: 4, at: 4.2 },
+      ],
+    },
+    {
+      title: 'WARDEN IN THE DARK',
+      speedMul: 1.02,
+      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'choir', count: 1, at: 5.5 }],
+    },
+  ],
+
+  // The foundry: everything that points and shoots, among the shutters that
+  // block both their orbs and your line.
+  foundry: [
+    {
+      title: 'THE LINE',
+      speedMul: 1.02,
+      groups: [{ kind: 'lancer', count: 2, at: 0 }, { kind: 'mote', count: 4, at: 2.6 }],
+    },
+    {
+      title: 'BATTERY',
+      speedMul: 1.06,
+      groups: [
+        { kind: 'spine', count: 2, at: 0 },
+        { kind: 'mote', count: 5, at: 2.2 },
+        { kind: 'seeder', count: 2, at: 4.6 },
+      ],
+    },
+    {
+      title: 'SIEGE PLATE',
+      speedMul: 1.08,
+      groups: [
+        { kind: 'bulwark', count: 1, at: 0 },
+        { kind: 'lancer', count: 2, at: 2.2 },
+        { kind: 'mote', count: 4, at: 4.4 },
+      ],
+    },
+    {
+      title: 'FORGE WARDEN',
+      speedMul: 1.1,
+      groups: [
+        { kind: 'warden', count: 1, at: 0 },
+        { kind: 'spine', count: 1, at: 4.5 },
+        { kind: 'mote', count: 3, at: 8 },
+      ],
+    },
+  ],
+
+  // The lattice: the classic five, dense, in the room where the line is
+  // forever being cut by pillars.
+  lattice: [
+    {
+      title: 'CROSSFIRE',
+      speedMul: 1.1,
+      groups: [
+        { kind: 'ward', count: 2, at: 0 },
+        { kind: 'seeder', count: 2, at: 1.6 },
+        { kind: 'mote', count: 4, at: 3.4 },
+      ],
+    },
+    {
+      title: 'PINCER',
+      speedMul: 1.14,
+      groups: [
+        { kind: 'lancer', count: 3, at: 0 },
+        { kind: 'spine', count: 1, at: 2 },
+        { kind: 'mote', count: 5, at: 3.6 },
+      ],
+    },
+    {
+      title: 'THE GRID BITES',
+      speedMul: 1.16,
+      groups: [
+        { kind: 'bulwark', count: 2, at: 0 },
+        { kind: 'ward', count: 2, at: 2.4 },
+        { kind: 'mote', count: 5, at: 4.2 },
+      ],
+    },
+    {
+      title: 'LATTICE WARDEN',
+      speedMul: 1.18,
+      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'lancer', count: 2, at: 5.5 }],
+    },
+  ],
+
+  // The derelict: ambushes among the ghosts.
+  derelict: [
+    {
+      title: 'SALVAGE CREW',
+      speedMul: 1.18,
+      groups: [{ kind: 'choir', count: 2, at: 0 }, { kind: 'mote', count: 5, at: 2.4 }],
+    },
+    {
+      title: 'DEAD CARGO',
+      speedMul: 1.2,
+      groups: [
+        { kind: 'bulwark', count: 1, at: 0 },
+        { kind: 'seeder', count: 3, at: 1.8 },
+        { kind: 'mote', count: 5, at: 4 },
+      ],
+    },
+    {
+      title: 'HAUNTS',
+      speedMul: 1.24,
+      groups: [
+        { kind: 'choir', count: 2, at: 0 },
+        { kind: 'ward', count: 2, at: 2 },
+        { kind: 'lancer', count: 2, at: 4.2 },
+      ],
+    },
+    {
+      title: 'CONDEMNED WARDEN',
+      speedMul: 1.26,
+      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'bulwark', count: 1, at: 5 }],
+    },
+  ],
+
+  // The crucible: everything, and then the last one.
+  crucible: [
+    {
+      title: 'PROVING GROUND',
+      speedMul: 1.26,
+      groups: [
+        { kind: 'mote', count: 8, at: 0 },
+        { kind: 'ward', count: 2, at: 2.2 },
+        { kind: 'seeder', count: 3, at: 4 },
+      ],
+    },
+    {
+      title: 'ALL LINES',
+      speedMul: 1.3,
+      groups: [
+        { kind: 'lancer', count: 3, at: 0 },
+        { kind: 'spine', count: 2, at: 1.8 },
+        { kind: 'bulwark', count: 1, at: 4 },
+        { kind: 'mote', count: 6, at: 5.6 },
+      ],
+    },
+    {
+      title: 'THE CHORUS',
+      speedMul: 1.34,
+      groups: [
+        { kind: 'choir', count: 3, at: 0 },
+        { kind: 'ward', count: 3, at: 2.4 },
+        { kind: 'lancer', count: 2, at: 4.8 },
+        { kind: 'mote', count: 6, at: 6.2 },
+      ],
+    },
+    {
+      title: 'THE LAST WARDEN',
+      speedMul: 1.38,
+      groups: [
+        { kind: 'warden', count: 1, at: 0 },
+        { kind: 'choir', count: 1, at: 4.5 },
+        { kind: 'lancer', count: 2, at: 9 },
+      ],
+    },
+  ],
+};
+
+/** Names for the endless laps, so lap three's waves still get title cards. */
 const ENDLESS_TITLES = [
-  'OVERRUN', 'CASCADE', 'RIPTIDE', 'FURNACE', 'BLACKOUT',
+  'OVERRUN', 'CASCADE', 'RIPTIDE', 'FURNACE', 'UNDERTOW',
   'THRESHOLD', 'MAELSTROM', 'ZENITH', 'EVENT HORIZON', 'NO QUARTER',
 ];
 
-export function waveDef(wave: number, rng: Rng): WaveDef {
-  if (wave <= SCRIPT.length) return SCRIPT[wave - 1];
+/**
+ * One wave, described. `heat` is how far past the authored campaign this run
+ * has gone — 0 for every campaign wave, climbing by one per endless wave after
+ * it. The heat scales a budget spent on the current sector's roster, so an
+ * endless lap through the blackout still fights blackout things, just more of
+ * them, faster.
+ */
+export function waveDef(sector: SectorId, waveIn: number, heat: number, rng: Rng): WaveDef {
+  if (heat <= 0) return SCRIPT[sector][waveIn - 1];
 
-  // Endless: a budget spent on progressively pricier enemies, still delivered
-  // in timed groups so the arena fills in waves rather than all at once.
-  const over = wave - SCRIPT.length;
-  const budget = 16 + over * 3.1;
-  const speedMul = Math.min(1.62, 1.22 + over * 0.022);
+  const budget = 15 + heat * 2.8;
+  const speedMul = Math.min(1.66, 1.38 + heat * 0.016);
 
-  const menu: { kind: EnemyKind; cost: number; max: number }[] = [
-    { kind: 'mote', cost: 1, max: 12 },
-    { kind: 'seeder', cost: 2, max: 5 },
-    { kind: 'ward', cost: 3, max: 5 },
-    { kind: 'lancer', cost: 3, max: 5 },
-    { kind: 'spine', cost: 4, max: 3 },
+  const cost: Partial<Record<EnemyKind, { cost: number; max: number }>> = {
+    mote: { cost: 1, max: 12 },
+    seeder: { cost: 2, max: 5 },
+    ward: { cost: 3, max: 5 },
+    lancer: { cost: 3, max: 5 },
+    spine: { cost: 4, max: 3 },
+    bulwark: { cost: 4, max: 3 },
     // One choir spawn is three bodies, which the cost already prices in.
-    { kind: 'bulwark', cost: 4, max: 3 },
-    { kind: 'choir', cost: 3, max: 3 },
-  ];
+    choir: { cost: 3, max: 3 },
+  };
+  const menu = theme.roster
+    .map((kind) => ({ kind, ...cost[kind]! }))
+    .filter((m) => m.cost !== undefined);
 
   const counts = new Map<EnemyKind, number>();
   let left = budget;
   let guard = 0;
-  while (left > 0 && guard++ < 80) {
+  while (left > 0 && guard++ < 80 && menu.length) {
     const pick = menu[Math.floor(rng() * menu.length)];
     const have = counts.get(pick.kind) ?? 0;
     if (have >= pick.max || pick.cost > left) continue;
@@ -167,6 +283,12 @@ export function waveDef(wave: number, rng: Rng): WaveDef {
 
   const groups: WaveDef['groups'] = [];
   let at = 0;
+  // A lap's fourth wave keeps its appointment: the sector's warden returns,
+  // with the procedural spawns demoted to escort.
+  if (waveIn === SECTOR_WAVES) {
+    groups.push({ kind: 'warden', count: 1, at: 0 });
+    at = 4;
+  }
   for (const [kind, count] of counts) {
     // Split anything numerous into two arrivals; a single dump of twelve motes
     // is a wall, two arrivals of six is a fight.
@@ -182,7 +304,7 @@ export function waveDef(wave: number, rng: Rng): WaveDef {
   return {
     groups,
     speedMul,
-    title: ENDLESS_TITLES[(over - 1) % ENDLESS_TITLES.length],
+    title: ENDLESS_TITLES[(heat - 1) % ENDLESS_TITLES.length],
   };
 }
 
@@ -210,8 +332,7 @@ export class Director {
     this.spawned = 0;
   }
 
-  begin(wave: number, rng: Rng) {
-    const def = waveDef(wave, rng);
+  begin(def: WaveDef, wave: number) {
     this.wave = wave;
     this.speedMul = def.speedMul;
     this.title = def.title ?? '';

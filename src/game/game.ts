@@ -31,14 +31,14 @@ import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
 import { TAU, clamp, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
 import { Particles } from '../engine/particles';
-import { theme } from '../sectors';
+import { SECTOR_ORDER, SECTOR_WAVES, SECTORS, setSector, theme } from '../sectors';
 import type { UiHit } from '../settings';
 import { view } from '../viewport';
 import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
 import { Player } from './player';
 import { clonePlan, solveStrike, type StrikePlan } from './strike';
 import { makeTerrain, terrain } from './terrain';
-import { Director } from './waves';
+import { Director, waveDef } from './waves';
 
 export type GameState = 'title' | 'play' | 'paused' | 'dead';
 export type PopupKind = 'score' | 'multi' | 'good' | 'bad' | 'wave';
@@ -84,6 +84,11 @@ export interface Burn {
 const BEST_KEY = 'afterburn.best.v1';
 const WAVE_KEY = 'afterburn.wave.v1';
 const RUNS_KEY = 'afterburn.runs.v1';
+/** Furthest sector index reached. The whole save format is still integers. */
+const SECT_KEY = 'afterburn.sector.v1';
+
+/** The longer pause a sector boundary earns, with the chapter card inside it. */
+const SECTOR_BREATHER = 3.4;
 
 /**
  * Thresholds calibrated against instrumented runs: a competent run dies around
@@ -169,10 +174,26 @@ export class Game {
   waveClear = 0;
   private breather = 0;
 
+  // ------------------------------------------------------------- campaign
+  /** True for the score-attack mode that never ends; false is the campaign. */
+  endless = false;
+  /** Index into `SECTOR_ORDER` of the room currently being fought. */
+  sectorIx = 0;
+  /** Where this run began, so a death retries the sector rather than the game. */
+  private startIx = 0;
+  /** A finished campaign. Read by the results screen for its headline. */
+  won = false;
+  /** Seconds left on the sector chapter card. */
+  sectorCard = 0;
+  /** Set when the mid-breather room swap has fired, so it fires once. */
+  private sectorSwapped = true;
+
   best = 0;
   bestWave = 0;
   runs = 0;
   isNewBest = false;
+  /** Furthest sector index ever reached, for the title's CONTINUE row. */
+  furthest = 0;
 
   /** Live preview of the strike the player is currently lining up. */
   aim: StrikePlan | null = null;
@@ -222,6 +243,7 @@ export class Game {
     this.best = this.load(BEST_KEY);
     this.bestWave = this.load(WAVE_KEY);
     this.runs = this.load(RUNS_KEY);
+    this.furthest = Math.min(this.load(SECT_KEY), SECTOR_ORDER.length - 1);
     this.player.reset();
     this.beginAttract();
     // The cold open does *not* fire here. See `arm`.
@@ -374,7 +396,30 @@ export class Game {
     makeTerrain(this.rng);
   }
 
-  start() {
+  /**
+   * Which sector, which wave within it, and how far past the authored
+   * campaign, for an absolute wave number. The one mapping between the flat
+   * counter everything already uses and the structure the campaign added —
+   * kept as a single function so it cannot be computed two ways.
+   */
+  private waveSlot(absWave: number) {
+    const ix = Math.floor((absWave - 1) / SECTOR_WAVES);
+    return {
+      ix: ix % SECTOR_ORDER.length,
+      sector: SECTOR_ORDER[ix % SECTOR_ORDER.length],
+      waveIn: ((absWave - 1) % SECTOR_WAVES) + 1,
+      heat: Math.max(0, absWave - SECTOR_ORDER.length * SECTOR_WAVES),
+    };
+  }
+
+  start(opts: { sector?: number; endless?: boolean } = {}) {
+    this.endless = opts.endless ?? false;
+    this.startIx = clamp(opts.sector ?? 0, 0, SECTOR_ORDER.length - 1);
+    this.sectorIx = this.startIx;
+    this.won = false;
+    this.sectorCard = 0;
+    this.sectorSwapped = true;
+    setSector(SECTOR_ORDER[this.sectorIx]);
     this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
     this.player.reset();
     this.swarm.reset();
@@ -401,7 +446,9 @@ export class Game {
     this.deadTime = 0;
     this.isNewBest = false;
     this.timeScale = 1;
-    this.wave = 0;
+    // The absolute wave counter keeps counting across sectors — a campaign
+    // started at the foundry begins at wave 9, because it *is* wave 9.
+    this.wave = this.startIx * SECTOR_WAVES;
     this.waveClear = 0;
     this.breather = 0;
     this.hasHeld = false;
@@ -432,7 +479,8 @@ export class Game {
 
   private nextWave() {
     this.wave++;
-    this.director.begin(this.wave, this.rng);
+    const slot = this.waveSlot(this.wave);
+    this.director.begin(waveDef(slot.sector, slot.waveIn, this.endless ? slot.heat : 0, this.rng), this.wave);
     this.waveCard = WAVE_CARD_TIME;
     this.player.focus = Math.min(FOCUS_MAX, this.player.focus + FOCUS_WAVE_REFILL);
     this.audio.onWave(this.wave);
@@ -447,7 +495,12 @@ export class Game {
   }
 
   private die() {
+    this.endRun(false);
+  }
+
+  private endRun(won: boolean) {
     this.state = 'dead';
+    this.won = won;
     this.deadTime = 0;
     // Every pointer-down and every Space press latches a confirm edge, and
     // nothing in a run consumes them — so by the time anyone dies, one is
@@ -456,21 +509,33 @@ export class Game {
     // score, best, and the retry prompt gone before they can be read. Same
     // disease as the pause screen's, same cure: drain on entry, then gate on
     // the hold so a player who died mid-aim must actually let go and press
-    // again before anything restarts.
+    // again before anything restarts. A victory earns the same protection —
+    // the one screen in the game that says you won must not dismiss itself.
     this.input.takeConfirm();
     this.input.takeRelease();
     this.deadGate = true;
     this.audio.setRunning(false);
-    this.audio.onDeath();
-    this.juice.addHitstop(0.24);
-    this.juice.addShake(34);
-    this.juice.addFlash(1, COL.danger);
-    this.juice.addPunch(0.14);
-    this.juice.addSlowmo(0.9);
-    this.particles.burst(this.player.x, this.player.y, COL.player, 64, 1.5, this.rng);
-    this.particles.ring(this.player.x, this.player.y, COL.player, 300, 0.8, 6);
-    this.particles.ring(this.player.x, this.player.y, COL.danger, 190, 0.6, 4);
-    this.addBurn(this.player.x, this.player.y, 64, COL.danger);
+    if (won) {
+      // The end of a campaign is a detonation of light, not of loss.
+      this.juice.addFlash(1, COL.playerCore);
+      this.juice.addPunch(0.18);
+      this.juice.addSlowmo(1.1);
+      this.juice.addShake(20);
+      this.particles.ring(this.player.x, this.player.y, COL.strike, 340, 0.9, 6);
+      this.particles.ring(this.player.x, this.player.y, COL.playerCore, 220, 0.7, 4);
+      this.audio.onWaveClear();
+    } else {
+      this.audio.onDeath();
+      this.juice.addHitstop(0.24);
+      this.juice.addShake(34);
+      this.juice.addFlash(1, COL.danger);
+      this.juice.addPunch(0.14);
+      this.juice.addSlowmo(0.9);
+      this.particles.burst(this.player.x, this.player.y, COL.player, 64, 1.5, this.rng);
+      this.particles.ring(this.player.x, this.player.y, COL.player, 300, 0.8, 6);
+      this.particles.ring(this.player.x, this.player.y, COL.danger, 190, 0.6, 4);
+      this.addBurn(this.player.x, this.player.y, 64, COL.danger);
+    }
 
     this.runs++;
     this.save(RUNS_KEY, this.runs);
@@ -543,6 +608,13 @@ export class Game {
       else if (hit.id === 'music' || hit.id === 'sfx') {
         this.uiDrag = hit.id;
         this.applySlider(hit.id, (px - hit.x) / hit.w);
+      } else if (hit.id.startsWith('go:')) {
+        // The title's mode rows. Confirm (Space, click anywhere else) still
+        // starts the campaign from the top — these are the alternatives:
+        // continue from the furthest sector reached, or the endless mode.
+        const mode = hit.id.slice(3);
+        if (mode === 'continue') this.start({ sector: this.furthest });
+        else if (mode === 'endless') this.start({ endless: true });
       }
       this.audio.onUiMove();
       input.takeConfirm();
@@ -841,7 +913,10 @@ export class Game {
       this.input.takeRelease();
       if (!this.input.holding) this.deadGate = false;
     } else if (this.deadTime > 0.8 && (this.input.takeConfirm() || this.input.takeRelease())) {
-      this.start();
+      // Retry means retry *here*: the sector is the checkpoint, so a death in
+      // the derelict restarts the derelict rather than the whole campaign.
+      // Endless restarts endless; a finished campaign rolls back to the top.
+      this.start({ sector: this.won ? 0 : this.sectorIx, endless: this.endless });
     }
   }
 
@@ -979,10 +1054,17 @@ export class Game {
     // --- wave flow
     if (this.breather > 0) {
       this.breather -= dtReal;
+      // The room changes at the card's halfway mark, while the screen is
+      // holding on the sector name — a cut disguised as a beat.
+      if (!this.sectorSwapped && this.breather <= SECTOR_BREATHER * 0.5) {
+        this.sectorSwapped = true;
+        this.swapSector();
+      }
       if (this.breather <= 0) this.nextWave();
     } else if (this.director.emptied && this.swarm.liveCount === 0) {
       this.clearWave();
     }
+    if (this.sectorCard > 0) this.sectorCard -= dtReal;
 
     // --- combo decay
     if (this.combo > 1) {
@@ -1372,7 +1454,6 @@ export class Game {
     const bonus = WAVE_CLEAR_BONUS * this.wave;
     this.score += bonus;
     this.waveClear = 1.6;
-    this.breather = WAVE_BREATHER;
     // Any orbs still in the air are swept, so a wave never ends on a stray shot.
     for (const o of this.swarm.orbs) {
       if (!o.alive) continue;
@@ -1390,6 +1471,48 @@ export class Game {
     );
     this.juice.addFlash(0.2, COL.hull);
     this.audio.onWaveClear();
+
+    // The campaign is over when the last authored wave clears. `endRun`
+    // reuses the death path's drain-and-gate machinery wholesale — that logic
+    // records being got wrong twice, and a victory screen that dismisses
+    // itself before it can be read is the same disease.
+    if (!this.endless && this.wave >= SECTOR_ORDER.length * SECTOR_WAVES) {
+      this.endRun(true);
+      return;
+    }
+
+    // A sector boundary earns a longer breather with the chapter card in it;
+    // the room itself changes underneath the card, mid-breather.
+    const next = this.waveSlot(this.wave + 1);
+    if (next.waveIn === 1) {
+      this.breather = SECTOR_BREATHER;
+      this.sectorCard = SECTOR_BREATHER;
+      this.sectorSwapped = false;
+    } else {
+      this.breather = WAVE_BREATHER;
+    }
+  }
+
+  /**
+   * The mid-breather room swap: the sector changes under a white flash while
+   * the chapter card is up. Rides the existing breather rather than adding a
+   * state — during a breather the field is empty by construction, which is
+   * the only precondition a room swap actually has.
+   */
+  private swapSector() {
+    const slot = this.waveSlot(this.wave + 1);
+    this.sectorIx = slot.ix;
+    setSector(slot.sector);
+    this.rebuildRoom();
+    if (!this.endless && slot.ix > this.furthest) {
+      this.furthest = slot.ix;
+      this.save(SECT_KEY, this.furthest);
+    }
+    this.juice.addFlash(1, theme.gridHot);
+    this.juice.addShake(24);
+    this.juice.addFringe(1.5);
+    this.juice.addPunch(0.12);
+    this.particles.ring(this.player.x, this.player.y, COL.playerCore, 240, 0.5, 4);
   }
 
   /** Queue a rule card the first time a species shows up in this run. */
