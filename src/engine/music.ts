@@ -46,8 +46,18 @@ export const TRACKS: readonly Track[] = [
 
 /** Seconds of overlap between the outgoing and incoming track. */
 const CROSSFADE = 2.4;
-/** Give up on a track after this many consecutive load failures. */
+/** Give up on recorded music after this many consecutive failures. */
 const MAX_FAILURES = 3;
+
+/**
+ * How long the live deck may make no progress before it is written off.
+ *
+ * A deck that reports itself paused has already failed — it was asked to play
+ * and it is not playing — so it gets much less rope than one that is merely
+ * waiting on bytes over a slow connection.
+ */
+const STALL_PAUSED = 1.5;
+const STALL_BUFFERING = 6;
 
 /**
  * itch.io serves the game from a nested path inside an iframe, so this has to
@@ -85,6 +95,9 @@ export class Music {
   private failures = 0;
   private fadeEndsAt = 0;
   private playing = false;
+  /** Watchdog: the live deck's last observed position, and when it froze there. */
+  private lastPos = -1;
+  private stalledSince = 0;
   /** More than one thing waits on the downbeat; see `onFirstNote`. */
   private firstNote: (() => void)[] = [];
 
@@ -216,9 +229,15 @@ export class Music {
           if (this.decks[this.live] === deck) this.advance(true);
         });
         deck.el.addEventListener('error', () => {
-          if (this.decks[this.live] !== deck) return;
-          if (++this.failures <= MAX_FAILURES) this.advance(true);
-          else this.playing = false;
+          if (this.decks[this.live] === deck) {
+            this.fail();
+            return;
+          }
+          // The idle deck is buffering the *next* track a whole track ahead, so
+          // a failure here is caught long before anyone would have heard it.
+          // Drop it and let `advance` pick a replacement when it gets there —
+          // requeueing right now would spin the whole bag if the server is down.
+          deck.track = null;
         });
       }
       this.ctx = ctx;
@@ -247,10 +266,51 @@ export class Music {
       .then(() => {
         this.playing = true;
         this.failures = 0;
+        this.armWatchdog();
+        // Start pulling the second track down now rather than at the crossfade,
+        // so it has a whole track's worth of time to arrive. See `queue`.
+        this.queue();
       })
       .catch(() => {
         this.playing = false;
       });
+  }
+
+  /**
+   * Buffer the next track into the idle deck.
+   *
+   * The crossfade used to be the first thing that asked for the next file,
+   * which gave it 2.4 seconds to travel — and the outgoing track was faded out
+   * and stopped on that same schedule whether or not the incoming one had
+   * arrived. A slow response therefore bought silence: the old track gone, the
+   * new one not yet started. Loading a whole track ahead means the overlap is
+   * an overlap of two buffered files, which is what it always claimed to be.
+   *
+   * Only ever called when the idle deck is genuinely idle — never while it is
+   * still fading out, because assigning `src` would cut its tail off.
+   */
+  private queue() {
+    const idle = this.decks[1 - this.live];
+    if (!idle || idle.track) return;
+    idle.track = this.take();
+    idle.el.src = src(idle.track.file);
+    idle.el.load();
+  }
+
+  /**
+   * One track failed in a way the player would hear as silence. Move on, and
+   * hand back to the procedural sequencer if this keeps happening — `Audio.tick`
+   * watches `active` and ramps the fallback in when recorded music gives up.
+   */
+  private fail() {
+    if (++this.failures <= MAX_FAILURES) this.advance(true);
+    else this.playing = false;
+  }
+
+  /** Reset the stall detector — the live deck is expected to move from here. */
+  private armWatchdog() {
+    this.lastPos = -1;
+    this.stalledSince = 0;
   }
 
   // ------------------------------------------------------------------ update
@@ -261,6 +321,32 @@ export class Music {
     if (now < this.fadeEndsAt) return; // a crossfade is already in flight
 
     const el = this.decks[this.live].el;
+
+    /**
+     * The watchdog, and the reason the soundtrack used to stop for good.
+     *
+     * Every other recovery path in this class hangs off the element's `error`
+     * event, and there is a whole class of failure that never fires one: a
+     * rejected `play()`. Autoplay refusals and the `AbortError` raised when a
+     * fresh `load()` interrupts a play already in flight both land there, and
+     * both leave this deck live, silent, and at position zero — where nothing
+     * would ever have moved it again, because `ended` needs a track that
+     * started and the crossfade below needs one that is nearly over.
+     *
+     * So progress is checked rather than assumed. If the live deck has not
+     * moved, it is written off and the next track takes over.
+     */
+    if (el.currentTime !== this.lastPos || el.ended) {
+      this.lastPos = el.currentTime;
+      this.stalledSince = 0;
+    } else if (!this.stalledSince) {
+      this.stalledSince = now;
+    } else if (now - this.stalledSince > (el.paused ? STALL_PAUSED : STALL_BUFFERING)) {
+      this.armWatchdog();
+      this.fail();
+      return;
+    }
+
     const dur = el.duration;
     if (!isFinite(dur) || dur <= 0) return; // metadata has not landed yet
     if (dur - el.currentTime <= CROSSFADE) this.advance(false);
@@ -280,9 +366,12 @@ export class Music {
     const now = ctx.currentTime;
     if (!from.gain || !to.gain) return;
 
-    to.track = this.take();
-    to.el.src = src(to.track.file);
-    to.el.currentTime = 0;
+    // Normally `queue` loaded this a whole track ago and there is nothing to do
+    // but play it. The exception is a deck whose preload failed, which cleared
+    // its track precisely so that this picks a different one.
+    if (!to.track) this.queue();
+    if (!to.track) return;
+    if (to.el.currentTime !== 0) to.el.currentTime = 0;
 
     const fade = hard ? 0.12 : CROSSFADE;
     to.gain.gain.cancelScheduledValues(now);
@@ -304,19 +393,34 @@ export class Music {
 
     this.live = 1 - this.live;
     this.fadeEndsAt = now + fade;
+    this.armWatchdog();
 
-    void to.el.play().catch(() => {
-      /* the element's own error handler owns the retry */
-    });
+    void to.el
+      .play()
+      .then(() => {
+        // Genuinely consecutive, which is what the name always claimed. Without
+        // this, three failures spread across an hour would retire the
+        // soundtrack as surely as three in a row.
+        this.failures = 0;
+      })
+      .catch(() => {
+        // A rejected `play()` fires no `error` event, so nothing else is coming
+        // to fix this. The watchdog in `tick` would catch it a second and a
+        // half later regardless; this just skips the wait.
+        this.fail();
+      });
 
     // Let the fade finish in the graph before the element stops feeding it.
     const el = from.el;
     setTimeout(
       () => {
-        if (this.decks[this.live].el !== el) {
-          el.pause();
-          el.currentTime = 0;
-        }
+        if (this.decks[this.live].el === el) return;
+        el.pause();
+        el.currentTime = 0;
+        // Now that it is genuinely idle, it becomes the deck that buffers the
+        // next track. Doing this any earlier would truncate the fade above.
+        from.track = null;
+        this.queue();
       },
       (fade + 0.1) * 1000,
     );
