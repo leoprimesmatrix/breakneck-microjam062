@@ -131,6 +131,19 @@ export interface SectorTheme {
    * appointments, not random encounters.
    */
   roster: readonly EnemyKind[];
+
+  // ---------------------------------------------------------------- sound
+  /**
+   * Where the soundtrack's low-pass sits while this room is simply being
+   * played in. Bullet time and pause still close the filter below this; what
+   * they release back to is now the room's ceiling rather than a hard 20 kHz,
+   * so a sealed room *sounds* sealed for as long as you are inside it.
+   */
+  bedHz: number;
+  /** The reverb send level: how much room the room has. */
+  verb: number;
+  /** The track this sector asks for, by file name. A request, not a command. */
+  track: string;
 }
 
 /**
@@ -176,6 +189,9 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     bodyFalloff: 0,
     terrain: 'none',
     roster: ['mote', 'seeder', 'ward'],
+    bedHz: 20000,
+    verb: 0.17,
+    track: 'ignition',
   },
 
   /**
@@ -224,6 +240,12 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     terrain: 'pillars',
     // The choir glows in the dark, which is the best room in the game for it.
     roster: ['mote', 'seeder', 'ward', 'choir'],
+    // The soundtrack heard through a dead facility's walls. And of the ten
+    // tracks that exist, one is literally called BLACKOUT; it was always
+    // going to live here.
+    bedHz: 1200,
+    verb: 0.26,
+    track: 'blackout',
   },
 
   /**
@@ -269,6 +291,10 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     bodyFalloff: 0,
     terrain: 'shutters',
     roster: ['mote', 'lancer', 'spine', 'bulwark'],
+    // Dry and loud: a working machine hall soaks up its own reflections.
+    bedHz: 20000,
+    verb: 0.1,
+    track: 'overpressure',
   },
 
   /**
@@ -308,6 +334,9 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     bodyFalloff: 0,
     terrain: 'pillars',
     roster: ['mote', 'seeder', 'ward', 'lancer', 'spine'],
+    bedHz: 20000,
+    verb: 0.22,
+    track: 'slipstream',
   },
 
   /**
@@ -346,6 +375,10 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     bodyFalloff: 0,
     terrain: 'none',
     roster: ['mote', 'seeder', 'choir', 'bulwark', 'lancer'],
+    // Wet and dulled: a big empty bay is all tail and no top end.
+    bedHz: 9000,
+    verb: 0.32,
+    track: 'coldstart',
   },
 
   /**
@@ -384,6 +417,9 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
     bodyFalloff: 0,
     terrain: 'none',
     roster: ['mote', 'seeder', 'ward', 'lancer', 'spine', 'bulwark', 'choir'],
+    bedHz: 18000,
+    verb: 0.2,
+    track: 'last-light',
   },
 };
 

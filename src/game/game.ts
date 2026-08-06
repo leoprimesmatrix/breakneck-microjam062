@@ -420,6 +420,10 @@ export class Game {
     this.sectorCard = 0;
     this.sectorSwapped = true;
     setSector(SECTOR_ORDER[this.sectorIx]);
+    // The room's sound arrives with the room; a run picked up at the derelict
+    // also asks for its track, which lands whenever the queue next buffers.
+    this.audio.onSector(theme);
+    if (this.startIx > 0) this.audio.tracks.request(theme.track);
     this.rng = makeRng((Math.random() * 0xffffffff) >>> 0);
     this.player.reset();
     this.swarm.reset();
@@ -482,6 +486,16 @@ export class Game {
     const slot = this.waveSlot(this.wave);
     this.director.begin(waveDef(slot.sector, slot.waveIn, this.endless ? slot.heat : 0, this.rng), this.wave);
     this.waveCard = WAVE_CARD_TIME;
+
+    // Entering a sector's last wave, ask the music for the *next* room's
+    // track. The queue buffers a whole track ahead by design, so this is the
+    // earliest moment the request can land on a deck with real lead time —
+    // request early, switch late, and the switch at the sector card either
+    // has a fully buffered deck or it quietly keeps the old track.
+    if (slot.waveIn === SECTOR_WAVES) {
+      const next = this.waveSlot(this.wave + 1);
+      this.audio.tracks.request(SECTORS[next.sector].track);
+    }
     this.player.focus = Math.min(FOCUS_MAX, this.player.focus + FOCUS_WAVE_REFILL);
     this.audio.onWave(this.wave);
 
@@ -1504,6 +1518,10 @@ export class Game {
     this.sectorIx = slot.ix;
     setSector(slot.sector);
     this.rebuildRoom();
+    // The room's acoustics change with its walls, and the soundtrack takes
+    // the cut if — and only if — its next deck is genuinely ready.
+    this.audio.onSector(theme);
+    this.audio.tracks.jump();
     if (!this.endless && slot.ix > this.furthest) {
       this.furthest = slot.ix;
       this.save(SECT_KEY, this.furthest);

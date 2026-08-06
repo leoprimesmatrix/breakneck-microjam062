@@ -190,7 +190,57 @@ export class Music {
     this.pos = 0;
   }
 
+  /** A track someone asked for by name, consumed by the next `take`. */
+  private wanted = -1;
+
+  /**
+   * Ask for a specific track, by file name. A request, not a command: it is
+   * consumed by whichever `take` happens next — usually the queue buffering a
+   * whole track ahead — so the deck it lands on has a full lead time to load.
+   * Taking out of band leaves the bag's position alone, so every track still
+   * comes around eventually.
+   */
+  request(file: string) {
+    const i = TRACKS.findIndex((t) => t.file === file);
+    if (i < 0 || i === this.last) return;
+    this.wanted = i;
+    // If the idle deck has already buffered its next pick, that pick predates
+    // this request — re-point the deck now, while there is still a whole wave
+    // of lead time to load in. Waiting for the next natural `take` would land
+    // the request one full track late, which for a sector switch is never.
+    if (!this.ctx) return;
+    if (this.ctx.currentTime < this.fadeEndsAt) return;
+    const idle = this.decks[1 - this.live];
+    if (idle && idle.track && idle.track.file !== file) {
+      idle.track = this.take();
+      idle.el.src = src(idle.track.file);
+      idle.el.load();
+    }
+  }
+
+  /**
+   * Crossfade to whatever is already buffered on the idle deck, now. False if
+   * that cannot be done safely — no context, nothing playing, a fade already
+   * in flight, or the idle deck not loaded. Never forces: the failure mode of
+   * a slow network is that the old track keeps playing, which is infinitely
+   * better than the silence a hard swap to an unbuffered deck used to buy.
+   */
+  jump(): boolean {
+    if (!this.ctx || !this.playing) return false;
+    if (this.ctx.currentTime < this.fadeEndsAt) return false;
+    const idle = this.decks[1 - this.live];
+    if (!idle || !idle.track || !idle.el.src) return false;
+    this.advance(false);
+    return true;
+  }
+
   private take(): Track {
+    if (this.wanted >= 0) {
+      const i = this.wanted;
+      this.wanted = -1;
+      this.last = i;
+      return TRACKS[i];
+    }
     if (this.pos >= this.order.length) this.reshuffle();
     const i = this.order[this.pos++];
     this.last = i;

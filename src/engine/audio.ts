@@ -137,6 +137,8 @@ export class Audio {
   private muted = settings.muted;
   private running = false;
   private paused = false;
+  /** The current room's low-pass ceiling; every filter release comes back here. */
+  private bedHz = 20000;
   /** Whether the sequencer has already stood down for a recorded track. */
   private sequencerYielded = false;
   private dilation = 1;
@@ -369,9 +371,26 @@ export class Audio {
     // dies mid-aim would be left listening through the bullet-time low-pass for
     // as long as the results screen is up. Open it here rather than there.
     if (!on && !this.paused) {
-      this.trackFilter.frequency.setTargetAtTime(20000, t, 0.25);
+      this.trackFilter.frequency.setTargetAtTime(this.bedHz, t, 0.25);
     }
     if (!on) this.setAlarm(false);
+  }
+
+  /**
+   * The room's sound. Two parameters, swept gently: where the soundtrack's
+   * low-pass rests, and how much reverb the space returns. Every state that
+   * used to release the filter to a hard 20 kHz now releases it to the room's
+   * ceiling instead — so bullet time in the blackout closes an already-sealed
+   * room further, and letting go comes back to sealed, not to open air.
+   */
+  onSector(t: { bedHz: number; verb: number }) {
+    this.bedHz = t.bedHz;
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (!this.paused) {
+      this.trackFilter.frequency.setTargetAtTime(this.bedHz, now, 0.6);
+    }
+    this.verbSend.gain.setTargetAtTime(t.verb, now, 0.6);
   }
 
   /**
@@ -392,7 +411,7 @@ export class Audio {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
 
-    this.sweep(this.trackFilter.frequency, on ? PAUSE_CORNER : 20000, t, on);
+    this.sweep(this.trackFilter.frequency, on ? PAUSE_CORNER : this.bedHz, t, on);
     // The fallback sequencer gets the same gesture from its own warmer ceiling,
     // so a player whose tracks failed to load still hears the hatch shut.
     this.sweep(this.musicFilter.frequency, on ? PAUSE_CORNER : 6000, t, on);
@@ -449,10 +468,11 @@ export class Audio {
     const slow = timeScale < 0.45;
 
     this.musicFilter.frequency.setTargetAtTime(slow ? 620 : 2400 + speed * 4200, t, 0.09);
-    // Same gesture on the recorded bus, but from wide open rather than from a
-    // warm ceiling: the drop has to be audible without the normal state sounding
-    // muffled. 700 Hz is roughly "heard through the hull".
-    this.trackFilter.frequency.setTargetAtTime(slow ? 700 : 20000, t, 0.09);
+    // Same gesture on the recorded bus, but from the room's ceiling rather
+    // than a warm one: the drop has to be audible without the normal state
+    // sounding muffled. 700 Hz is roughly "heard through the hull" — and in a
+    // room whose bed already sits below that, the drop still deepens it.
+    this.trackFilter.frequency.setTargetAtTime(slow ? Math.min(700, this.bedHz) : this.bedHz, t, 0.09);
     if (this.droneGain) {
       this.droneGain.gain.setTargetAtTime(slow ? 0.11 : 0.0, t, 0.12);
     }
