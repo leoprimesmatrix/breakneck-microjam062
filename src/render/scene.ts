@@ -1,7 +1,7 @@
 import { BURN_CAP, COL, PLAYER_R, SCAR_CAP, SPAWN_TELEGRAPH, rgba, type RGB } from '../config';
 import { TAU, clamp, clamp01, easeOutCubic, easeOutQuint } from '../engine/math';
 import { ENEMY_COL, type Game } from '../game/game';
-import { ORB_R } from '../game/enemies';
+import { ORB_R, Swarm } from '../game/enemies';
 import type { StrikePlan } from '../game/strike';
 import { terrain } from '../game/terrain';
 import { theme } from '../sectors';
@@ -897,15 +897,22 @@ function drawLancerMarks(ctx: CanvasRenderingContext2D, game: Game) {
   const len = Math.hypot(view.arenaW, view.arenaH);
   ctx.save();
   for (const e of game.swarm.list) {
-    if (!e.alive || e.spawn > 0 || e.kind !== 'lancer' || e.state !== 1) continue;
-    const t = 1 - clamp01(e.timer / 1.05);
+    if (!e.alive || e.spawn > 0) continue;
+    // The warden borrows this pass for its endgame charge — same telegraph,
+    // same fairness contract. It cannot share the lancer's `state === 1` test
+    // because its `state` holds the armour bitmask, so the check lives behind
+    // a Swarm static and this pass stays ignorant of the bit layout.
+    const wt = Swarm.wardenMark(e);
+    if (!(wt > 0) && (e.kind !== 'lancer' || e.state !== 1)) continue;
+    const t = wt > 0 ? wt : 1 - clamp01(e.timer / 1.05);
     const x2 = e.x + e.markX * len;
     const y2 = e.y + e.markY * len;
 
+    const mcol = e.kind === 'warden' ? COL.warden : COL.lancer;
     ctx.globalCompositeOperation = 'lighter';
     // A wide dim band that narrows and brightens as the shot resolves: the
     // threat reads as "charging" without needing a number.
-    ctx.strokeStyle = rgba(COL.lancer, 0.06 + t * 0.1);
+    ctx.strokeStyle = rgba(mcol, 0.06 + t * 0.1);
     ctx.lineWidth = 40 * (1 - t * 0.62);
     ctx.beginPath();
     ctx.moveTo(e.x, e.y);
@@ -914,7 +921,7 @@ function drawLancerMarks(ctx: CanvasRenderingContext2D, game: Game) {
 
     ctx.setLineDash([16, 14]);
     ctx.lineDashOffset = -game.clock * 190;
-    ctx.strokeStyle = rgba(COL.lancer, 0.35 + t * 0.5);
+    ctx.strokeStyle = rgba(mcol, 0.35 + t * 0.5);
     ctx.lineWidth = 1.5 + t * 2.5;
     ctx.beginPath();
     ctx.moveTo(e.x, e.y);
@@ -1133,12 +1140,13 @@ function drawAim(ctx: CanvasRenderingContext2D, game: Game, plan: StrikePlan) {
 
   // Blocked tail — where the strike would have gone, and cannot.
   if (plan.blocked) {
-    // A shield is a mistake; a slab is furniture. Red is the game's word for
-    // "you got this wrong", and spending it on a wall that was drawn in the
-    // room before the player even aimed teaches them to distrust the colour.
-    // The room's own wall colour says *stopped* without saying *punished*.
+    // A shield is a mistake; a slab is furniture; a warden's plate is
+    // *progress* — the strike will break it. Red is the game's word for "you
+    // got this wrong", and it is reserved for the one of the three that is:
+    // the wall speaks in the room's colour, the plate in the warden's own.
     const solid = plan.blockKind === 'solid';
-    const mark = solid ? theme.wall : COL.danger;
+    const plate = plan.blockKind === 'plate';
+    const mark = solid ? theme.wall : plate ? COL.warden : COL.danger;
     const bx = plan.x0 + plan.dx * (plan.dist + 210);
     const by = plan.y0 + plan.dy * (plan.dist + 210);
     ctx.setLineDash([9, 13]);
@@ -1147,12 +1155,13 @@ function drawAim(ctx: CanvasRenderingContext2D, game: Game, plan: StrikePlan) {
     line(ctx, ex, ey, bx, by);
     ctx.setLineDash([]);
 
-    if (solid) {
+    if (solid || plate) {
       // A bar across the line rather than a cross through it: the strike is
-      // arriving somewhere, not failing at it.
+      // arriving somewhere, not failing at it. The plate's bar pulses,
+      // because what it is arriving at is about to not exist.
       const nx = -plan.dy;
       const ny = plan.dx;
-      const s = 17;
+      const s = plate ? 17 + Math.sin(t * 10) * 2 : 17;
       ctx.strokeStyle = rgba(mark, 0.9 * focusA);
       ctx.lineWidth = 4;
       line(ctx, ex + nx * s, ey + ny * s, ex - nx * s, ey - ny * s);
@@ -1168,7 +1177,7 @@ function drawAim(ctx: CanvasRenderingContext2D, game: Game, plan: StrikePlan) {
     // player has to connect "this line stops" to "that arc is a shield".
     if (game.aimBlend > 0.05) {
       ctx.globalCompositeOperation = 'source-over';
-      drawVec(ctx, solid ? 'SOLID' : 'SHIELDED', ex, ey - 40, {
+      drawVec(ctx, solid ? 'SOLID' : plate ? 'ARMOUR' : 'SHIELDED', ex, ey - 40, {
         size: 17,
         weight: 0.15,
         tracking: 0.18,

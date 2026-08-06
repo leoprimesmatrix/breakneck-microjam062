@@ -107,6 +107,7 @@ export const ENEMY_COL: Record<EnemyKind, RGB> = {
   spine: COL.spine,
   bulwark: COL.bulwark,
   choir: COL.choir,
+  warden: COL.warden,
 };
 
 export class Game {
@@ -305,6 +306,19 @@ export class Game {
 
   get inDanger() {
     return this.state === 'play' && this.player.hull <= 1;
+  }
+
+  /**
+   * The live warden, if one is on the field. Stateless on purpose — a scan of
+   * forty slots once a frame costs nothing, and a cached reference would need
+   * resetting at every one of the places a swarm can be emptied, each of which
+   * is a bug waiting for the one that gets missed.
+   */
+  get boss(): Enemy | null {
+    for (const e of this.swarm.list) {
+      if (e.alive && e.kind === 'warden') return e;
+    }
+    return null;
   }
 
   /**
@@ -1083,6 +1097,14 @@ export class Game {
       return;
     }
 
+    // A warden's plate stopping the strike is not a rebuff, it is the fight
+    // working: the plate breaks. Checked before the shield branch, because a
+    // warden hit also satisfies `blocked && enemy`.
+    if (hit.blocked && hit.enemy && hit.enemy.kind === 'warden') {
+      this.breakPlate(hit.enemy, hit.x, hit.y);
+      return;
+    }
+
     if (hit.blocked && hit.enemy) {
       this.onBlocked(hit.enemy, hit.x, hit.y);
       return;
@@ -1183,6 +1205,49 @@ export class Game {
     this.particles.spall(x, y, away, COL.ward, 16, this.rng);
     this.pushPopup(x, y - 40, 'BLOCKED', 'FLANK IT', 'bad', COL.ward);
     this.audio.onBlocked(this.panAt(x));
+  }
+
+  /**
+   * The strike breaking one of a warden's plates.
+   *
+   * Reads as a kill, not a rebuff, because it is one: heavy stop, the plate's
+   * arc shattering off the ring, score. The stun is roughly half the shield's
+   * — the ship still has to disengage from a wall it just hit, but punishing a
+   * correct hit as hard as a wrong one teaches the player the fight is unfair,
+   * and this fight is nothing but these hits until the last one.
+   */
+  private breakPlate(e: Enemy, x: number, y: number) {
+    const p = this.player;
+    p.travelled = p.plan ? p.plan.dist : p.travelled;
+    p.stun = 0.18;
+    e.flash = 1;
+
+    const away = Math.atan2(p.y - e.y, p.x - e.x);
+    const i = Swarm.plateAt(e, x, y);
+    if (Swarm.breakPlate(e, i)) {
+      const col = ENEMY_COL.warden;
+      const gain = Math.round(150 * this.combo);
+      this.score += gain;
+      // The broken arc tumbles off: a small curved slab, built at the break.
+      const arc: [number, number][] = [];
+      const slice = TAU / 12;
+      for (let k = 0; k <= 4; k++) arc.push([Math.cos((k / 4) * slice) * e.r, Math.sin((k / 4) * slice) * e.r]);
+      for (let k = 4; k >= 0; k--) arc.push([Math.cos((k / 4) * slice) * e.r * 0.62, Math.sin((k / 4) * slice) * e.r * 0.62]);
+      this.particles.shatter(x, y, arc, away, col, p.plan ? p.plan.dx * 200 : 0, p.plan ? p.plan.dy * 200 : 0, this.rng);
+      this.particles.ring(x, y, col, 70, 0.36, 3);
+      this.pushPopup(x, y - 34, `${gain}`, Swarm.platesLeft(e) ? '' : 'EXPOSED', 'score', col);
+      this.juice.addHitstop(0.08);
+      this.juice.addShake(13);
+      this.juice.addFlash(0.16, col);
+      this.audio.onKill('warden', 0, this.combo, this.panAt(x));
+    } else {
+      // The ring turned a dead plate under the contact between launch and
+      // arrival. Nothing to break; it is a wall for a frame.
+      this.audio.onWall(this.panAt(x));
+    }
+    p.vx = Math.cos(away) * 360;
+    p.vy = Math.sin(away) * 360;
+    this.juice.addKick(Math.cos(away), Math.sin(away), 7);
   }
 
   /**

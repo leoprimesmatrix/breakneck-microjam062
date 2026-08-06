@@ -372,6 +372,22 @@ export const SECTORS: Record<SectorId, SectorTheme> = {
   },
 };
 
+/**
+ * Each sector's warden: how many armour plates its ring carries and how fast
+ * the ring turns. One enemy kind, six fights — the `speedMul` pattern applied
+ * to a boss. Sign of `spin` is the opening direction of the dance; magnitude
+ * climbs across the campaign, and plate count with it, so the final keyhole is
+ * the narrowest and the fastest.
+ */
+export const WARDEN_DEF: Record<SectorId, { plates: number; spin: number; r: number }> = {
+  range: { plates: 10, spin: 0.55, r: 54 },
+  blackout: { plates: 12, spin: 0.7, r: 56 },
+  foundry: { plates: 12, spin: -0.75, r: 58 },
+  lattice: { plates: 14, spin: 0.8, r: 58 },
+  derelict: { plates: 14, spin: -0.88, r: 60 },
+  crucible: { plates: 16, spin: 0.98, r: 64 },
+};
+
 /** The room being drawn. Read by `render/`; written only by `setSector`. */
 export const theme: SectorTheme = { ...SECTORS.range };
 

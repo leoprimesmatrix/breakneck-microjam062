@@ -9,6 +9,7 @@ import {
   type EnemyKind,
 } from '../game/enemies';
 import { ENEMY_COL, type Game } from '../game/game';
+import { WARDEN_DEF, theme } from '../sectors';
 import { drawRadial, flareSprite, glowSprite, haloSprite } from './glow';
 
 /**
@@ -52,6 +53,7 @@ const UNIT: Record<EnemyKind, [number, number][]> = {
   spine: silhouette('spine', 1),
   bulwark: silhouette('bulwark', 1),
   choir: silhouette('choir', 1),
+  warden: silhouette('warden', 1),
 };
 
 /**
@@ -70,9 +72,11 @@ const VIS: Record<EnemyKind, number> = {
   lancer: 1.2,
   spine: 1.2,
   // The bulwark's drawn radius *is* its armour radius: the wall has to sit
-  // exactly where the strike stops, or the promise visibly lies.
+  // exactly where the strike stops, or the promise visibly lies. Same for the
+  // warden, at boss scale.
   bulwark: 1.28,
   choir: 1.3,
+  warden: 1.14,
 };
 
 /**
@@ -84,7 +88,7 @@ const VIS: Record<EnemyKind, number> = {
  * enemy looked like a figure in a robe rather than a machine behind a barricade.
  */
 const SHADOW: Record<EnemyKind, number> = {
-  mote: 1, seeder: 1, ward: 0.54, lancer: 1, spine: 1, bulwark: 1, choir: 1,
+  mote: 1, seeder: 1, ward: 0.54, lancer: 1, spine: 1, bulwark: 1, choir: 1, warden: 1,
 };
 
 /**
@@ -333,6 +337,7 @@ const DRAW: Record<EnemyKind, (ctx: CanvasRenderingContext2D, p: Pose) => void> 
   spine: drawSpine,
   bulwark: drawBulwark,
   choir: drawChoir,
+  warden: drawWarden,
 };
 
 export function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alpha: number) {
@@ -381,7 +386,7 @@ export function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Gam
  * into the name beside it.
  */
 const PORTRAIT_OFF: Record<EnemyKind, number> = {
-  mote: 0, seeder: 0, ward: -0.42, lancer: -0.24, spine: -0.5, bulwark: 0, choir: 0,
+  mote: 0, seeder: 0, ward: -0.42, lancer: -0.24, spine: -0.5, bulwark: 0, choir: 0, warden: 0,
 };
 
 /**
@@ -416,8 +421,9 @@ export function drawEnemyPortrait(
     seed: 1.7,
     alpha: 1,
     // Lancers pose mid-mark and spines pose part-charged: a card should show the
-    // state the player is being warned about, not the idle one.
-    state: 1,
+    // state the player is being warned about, not the idle one. The warden's
+    // `state` is its armour bitmask, so its card wears the full ring.
+    state: kind === 'warden' ? (1 << 24) - 1 : 1,
     shield: Math.sin(clock * 0.7) * 0.5,
     flash: 0,
     charge: 0.5 + Math.sin(clock * 1.6) * 0.4,
@@ -983,4 +989,98 @@ function drawChoir(ctx: CanvasRenderingContext2D, p: Pose) {
   const sing = 0.5 + 0.5 * Math.sin(p.age * 4.35 + p.state * 2.09);
   drawRadial(ctx, glowSprite(p.col, 0.5), 0, 0, r * (1.6 + sing * 1.1), p.alpha * (0.25 + sing * 0.45));
   ctx.globalCompositeOperation = 'source-over';
+}
+
+// ---------------------------------------------------------------------- warden
+/**
+ * The exam.
+ *
+ * A core in a turning ring of plates, where every live plate is drawn from the
+ * same bitmask the solver blocks on — `p.state`, bit per plate — so a hole the
+ * player has made is *exactly* where the strike will pass. There is no second
+ * bookkeeping to drift out of sync: the picture is the hitbox.
+ *
+ * Reads to sell, in order: which angles are wall and which are door; that the
+ * broken plates stay broken while the ring carries them round; and the core
+ * getting visibly angrier as its armour thins.
+ */
+function drawWarden(ctx: CanvasRenderingContext2D, p: Pose) {
+  const r = p.r;
+  const total = WARDEN_DEF[theme.id].plates;
+  const slice = TAU / total;
+  const inner = r * 0.66;
+  const left = (() => {
+    let n = 0;
+    for (let b = p.state & ((1 << 24) - 1); b; b &= b - 1) n++;
+    return Math.min(n, total);
+  })();
+  const rage = 1 - left / total;
+
+  ctx.save();
+  ctx.rotate(p.shield);
+
+  // The plates. Each is its own annular sector with its own seams, because a
+  // ring that gaps where plates die has to be built from parts that can die.
+  for (let i = 0; i < total; i++) {
+    if (!(p.state & (1 << i))) continue;
+    const a0 = i * slice + 0.04;
+    const a1 = (i + 1) * slice - 0.04;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.02, a0, a1);
+    ctx.arc(0, 0, inner, a1, a0, true);
+    ctx.closePath();
+    const mid = (a0 + a1) * 0.5;
+    const litK = Math.max(0, Math.cos(mid - (p.toP - p.shield)));
+    // A step brighter than the standard hull ramp. Every other body can afford
+    // to be subtle; this ring is the boss's entire rulebook, it has to read in
+    // a red room at half armour with the core flaring, and a wall that fades
+    // into the decor is a rule the player cannot see.
+    ctx.fillStyle = litK > 0.4 ? hullLit(p.col) : hullMid(p.col);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.62)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Outer face catches the room.
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.02, a0, a1);
+    ctx.strokeStyle = rgba(p.col, (0.5 + litK * 0.45) * p.alpha);
+    ctx.lineWidth = 2.8;
+    ctx.stroke();
+  }
+
+  // Broken sockets: a stub where a plate used to seat, so the holes read as
+  // damage done rather than as design. Much quieter than any live plate —
+  // broken must never be mistaken for wall.
+  ctx.strokeStyle = rgba(p.col, 0.16 * p.alpha);
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < total; i++) {
+    if (p.state & (1 << i)) continue;
+    const a0 = i * slice + 0.1;
+    const a1 = (i + 1) * slice - 0.1;
+    ctx.beginPath();
+    ctx.arc(0, 0, inner * 1.02, a0, a1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // The core: a heavy lens that runs hotter as the armour thins, ringed by a
+  // bezel that never turns — the thing inside is not part of the machine
+  // around it.
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.4, 0, TAU);
+  ctx.fillStyle = hullDark(p.col);
+  ctx.fill();
+  ctx.strokeStyle = rgba(p.col, 0.75 * p.alpha);
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+  lens(ctx, 0, 0, r * (0.2 + rage * 0.07), p.col, p.alpha, 1 + rage * 1.3 + p.flash * 1.2);
+
+  // Charging: a warning flare, sized to warn rather than to blind — at full
+  // rage the core is already the hottest thing on screen, and stacking a
+  // half-screen flare on top of it erased the ring the player needs to read.
+  if (p.state & (1 << 28)) {
+    ctx.globalCompositeOperation = 'lighter';
+    drawRadial(ctx, flareSprite(COL.warn, 0.9), 0, 0, r * 1.05, p.alpha * 0.32);
+    ctx.globalCompositeOperation = 'source-over';
+  }
 }

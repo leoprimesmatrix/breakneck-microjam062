@@ -143,6 +143,10 @@ export const COL = {
   // choir is nearly white-hot, the smallest body wearing the brightest voice.
   bulwark: [232, 92, 128] as RGB,
   choir: [255, 214, 178] as RGB,
+  // The ward's big brother wears the ward's family. That kinship is doing
+  // curriculum work: ward teaches the angle, bulwark teaches the schedule,
+  // warden is the exam, and the colour tells you which course you are in.
+  warden: [148, 96, 255] as RGB,
 
   ink: [232, 240, 250] as RGB,
   dim: [124, 138, 164] as RGB,

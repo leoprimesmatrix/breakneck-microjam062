@@ -37,6 +37,7 @@ const KIND_WAVE: Record<EnemyKind, OscillatorType> = {
   // Heavy plate deserves the buzziest wave in the box; the choir sings pure.
   bulwark: 'sawtooth',
   choir: 'sine',
+  warden: 'square',
 };
 
 /** Music bus level while a run is live, and while it is not. */

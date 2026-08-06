@@ -44,11 +44,12 @@ export interface StrikePlan {
   kills: number;
   blocked: boolean;
   /**
-   * What stopped it, when something did. A shield is a mistake the player made;
-   * a slab is geometry. They deserve different feedback and different words, so
-   * the reason travels with the plan rather than being re-derived downstream.
+   * What stopped it, when something did. A shield is a mistake the player
+   * made; a slab is geometry; a warden's plate is *progress* — it breaks. They
+   * deserve different feedback and different words, so the reason travels with
+   * the plan rather than being re-derived downstream.
    */
-  blockKind: '' | 'shield' | 'solid';
+  blockKind: '' | 'shield' | 'solid' | 'plate';
   hitWall: boolean;
 }
 
@@ -186,7 +187,7 @@ export function solveStrike(
     if (c.enemy && Swarm.blocks(c.enemy, cx, cy)) {
       plan.hits.push({ enemy: c.enemy, orb: null, block: null, d: c.d, x: cx, y: cy, blocked: true });
       plan.blocked = true;
-      plan.blockKind = 'shield';
+      plan.blockKind = c.enemy.kind === 'warden' ? 'plate' : 'shield';
       dist = Math.max(0, c.d - 2);
       break;
     }

@@ -137,7 +137,19 @@ export class Player {
       this.hitCursor++;
     }
 
-    return this.travelled >= plan.dist - 1e-4;
+    const done = this.travelled >= plan.dist - 1e-4;
+    // A blocked hit sits deliberately just past `plan.dist` — the solver backs
+    // the stop off by two units so the ship never interpenetrates what stopped
+    // it. Which means the distance test above can never cross it, and the
+    // arrival against a shield would resolve nothing at all: no stun, no
+    // feedback, a silent stop. Hand it over explicitly the moment the strike
+    // completes, in the same ordered stream as every other hit.
+    if (done && this.hitCursor < plan.hits.length && plan.hits[this.hitCursor].blocked) {
+      out.push(this.hitCursor);
+      this.hitCursor++;
+    }
+
+    return done;
   }
 
   endStrike() {

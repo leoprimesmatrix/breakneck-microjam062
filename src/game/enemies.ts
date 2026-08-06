@@ -1,5 +1,6 @@
 import { PLAYER_R } from '../config';
 import { TAU, angleDelta, clamp, randRange, type Rng } from '../engine/math';
+import { WARDEN_DEF, theme } from '../sectors';
 import { view } from '../viewport';
 import { terrain } from './terrain';
 
@@ -13,7 +14,8 @@ import { terrain } from './terrain';
  * deep when it has one rule and one exception.
  */
 
-export type EnemyKind = 'mote' | 'seeder' | 'ward' | 'lancer' | 'spine' | 'bulwark' | 'choir';
+export type EnemyKind =
+  | 'mote' | 'seeder' | 'ward' | 'lancer' | 'spine' | 'bulwark' | 'choir' | 'warden';
 
 export interface EnemySpec {
   kind: EnemyKind;
@@ -81,6 +83,14 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
     r: 11,
     speed: 42,
     score: 120,
+  },
+  warden: {
+    kind: 'warden',
+    name: 'WARDEN',
+    rule: 'Every plate breaks in one hit. So does the thing inside.',
+    r: 56,
+    speed: 26,
+    score: 2000,
   },
 };
 
@@ -204,6 +214,23 @@ export function silhouette(kind: EnemyKind, r: number): [number, number][] {
       }
       return pts;
     }
+    // The warden's shatter shape: a heavier arc of wall than the bulwark's,
+    // because what dies at the end is the core and its last ring together.
+    // (Individual plate breaks shatter a single-plate arc built at the kill
+    // site, not this.)
+    case 'warden': {
+      const pts: [number, number][] = [];
+      const n = 12;
+      for (let i = 0; i <= n; i++) {
+        const a = 0.4 + (i / n) * (TAU - 0.8);
+        pts.push([Math.cos(a) * r * 1.02, Math.sin(a) * r * 1.02]);
+      }
+      for (let i = n; i >= 0; i--) {
+        const a = 0.4 + (i / n) * (TAU - 0.8);
+        pts.push([Math.cos(a) * r * 0.5, Math.sin(a) * r * 0.5]);
+      }
+      return pts;
+    }
     // A bell. Small, rounded crown, flared mouth — an object that sings, at a
     // size where anything more detailed would collapse into a blob. The flare
     // matters: straight sides make a gem, and a gem reads as a pickup.
@@ -241,6 +268,40 @@ const BULWARK_SPIN = 0.8;
 /** Orbit radius and angular rate of a choir trio. */
 export const CHOIR_R = 54;
 const CHOIR_RATE = 1.45;
+
+/**
+ * The warden's ring lives in the five scalars every enemy already has:
+ * `state` is the armour bitmask, `shield` the ring angle, `spin` the signed
+ * rate, `timer` the orb/charge cadence, `markX/markY` the charge vector. Not
+ * one field was added for it, which is the entire scope discipline of the
+ * boss in a sentence. The one non-plate bit:
+ */
+const W_CHARGING = 1 << 28;
+/** One-shot phase markers, so a reversal fires exactly once per threshold. */
+const W_P2 = 1 << 29;
+const W_P3 = 1 << 30;
+/** Everything below the flag bits is plate state. */
+const W_PLATES = (1 << 24) - 1;
+const WARDEN_ORB_PERIOD = 1.2;
+const WARDEN_REST = 1.5;
+const WARDEN_CHARGE_TIME = 0.66;
+const WARDEN_CHARGE_SPEED = 920;
+/**
+ * How much each broken plate grows the ring rate. Growth only — the first
+ * draft also flipped the sign per break, which boomeranged every fresh hole
+ * straight back to the angle it was made from and let a fixed-position player
+ * kill the boss in three strikes. Reversals are phase events now: they happen
+ * twice, at the ⅔ and ⅓ thresholds, where a surprise is an act break instead
+ * of a metronome.
+ */
+const WARDEN_RAGE = 1.13;
+const WARDEN_SPIN_CAP = 2.2;
+
+const popcount = (v: number) => {
+  let n = 0;
+  for (let b = v & W_PLATES; b; b &= b - 1) n++;
+  return n;
+};
 
 export interface Enemy {
   kind: EnemyKind;
@@ -359,6 +420,17 @@ export class Swarm {
     // A bulwark's armour turns at a constant rate, never toward you — that is
     // the ward's move, and the two must not blur. Direction is rolled once.
     if (kind === 'bulwark') e.spin = rng() < 0.5 ? -BULWARK_SPIN : BULWARK_SPIN;
+
+    // The warden arrives wearing its sector's ring. Same override pattern as
+    // `speedMul`: the base is a table lookup, so the sector multiplying it
+    // costs nothing and lives in data.
+    if (kind === 'warden') {
+      const def = WARDEN_DEF[theme.id];
+      e.r = def.r;
+      e.spin = def.spin;
+      e.state = (1 << def.plates) - 1;
+      e.timer = 2;
+    }
 
     // A choir is one spawn that is three bodies. The trio shares an orbit
     // centre carried in `markX/markY` — free on non-lancers — and each body
@@ -543,6 +615,81 @@ export class Swarm {
           break;
         }
 
+        case 'warden': {
+          // Phases fall out of how much armour is left — no phase machine,
+          // just popcount read against the plate total the ring started with.
+          const total = WARDEN_DEF[theme.id].plates;
+          const left = popcount(e.state);
+          const p3 = left <= total / 3;
+          const p2 = left <= (total * 2) / 3;
+
+          // The act breaks: entering each phase reverses the ring once, and
+          // hard. A reversal is the one thing a player tracking the schedule
+          // cannot extrapolate, so it is rationed to the two moments the fight
+          // is supposed to escalate.
+          if (p2 && !(e.state & W_P2)) {
+            e.state |= W_P2;
+            e.spin = clamp(-e.spin * 1.22, -WARDEN_SPIN_CAP, WARDEN_SPIN_CAP);
+          }
+          if (p3 && !(e.state & W_P3)) {
+            e.state |= W_P3;
+            e.spin = clamp(-e.spin * 1.18, -WARDEN_SPIN_CAP, WARDEN_SPIN_CAP);
+          }
+
+          e.shield += e.spin * dt;
+          e.rot = e.shield;
+          e.timer -= dt;
+
+          if (p3) {
+            // Endgame: the ring is mostly holes, so it stops relying on the
+            // wall and starts using the lancer's answer — mark and charge.
+            if (e.state & W_CHARGING) {
+              e.vx *= Math.exp(-1.3 * dt);
+              e.vy *= Math.exp(-1.3 * dt);
+              if (e.timer <= 0) {
+                e.state &= ~W_CHARGING;
+                e.timer = WARDEN_REST;
+              }
+            } else {
+              e.vx += (nx * spd * 0.6 - e.vx) * (1 - Math.exp(-1.4 * dt));
+              e.vy += (ny * spd * 0.6 - e.vy) * (1 - Math.exp(-1.4 * dt));
+              e.markX = nx;
+              e.markY = ny;
+              if (e.timer <= 0) {
+                e.state |= W_CHARGING;
+                e.timer = WARDEN_CHARGE_TIME;
+                e.vx = e.markX * WARDEN_CHARGE_SPEED;
+                e.vy = e.markY * WARDEN_CHARGE_SPEED;
+                this.lancerCharges++;
+              }
+            }
+          } else {
+            e.vx += (nx * spd - e.vx) * (1 - Math.exp(-1.6 * dt));
+            e.vy += (ny * spd - e.vy) * (1 - Math.exp(-1.6 * dt));
+            if (p2 && e.timer <= 0) {
+              // The holes shoot. Every dead plate is both the way in and a
+              // muzzle, which is the whole fight stated as one fact.
+              const total2 = total;
+              const dead: number[] = [];
+              for (let i = 0; i < total2; i++) if (!(e.state & (1 << i))) dead.push(i);
+              if (dead.length) {
+                const slice = TAU / total2;
+                const a = e.shield + (dead[(Math.abs(e.seed * 997 + e.age * 13) | 0) % dead.length] + 0.5) * slice;
+                this.fireOrb(
+                  e.x + Math.cos(a) * e.r * 0.9,
+                  e.y + Math.sin(a) * e.r * 0.9,
+                  Math.cos(a),
+                  Math.sin(a),
+                );
+              }
+              e.timer = WARDEN_ORB_PERIOD;
+            } else if (!p2 && e.timer <= 0) {
+              e.timer = WARDEN_ORB_PERIOD;
+            }
+          }
+          break;
+        }
+
         case 'choir': {
           // The trio's shared centre drifts toward you; each body carries its
           // own copy and advances it with identical arithmetic, so the copies
@@ -646,7 +793,64 @@ export class Swarm {
       const a = Math.atan2(fromY - e.y, fromX - e.x);
       return Math.abs(angleDelta(e.shield, a)) > BULWARK_GAP;
     }
+    // The warden blocks wherever a plate still stands. Same function shape a
+    // third time; the exposed angles are the plates the player has already
+    // broken, carried around by the turning ring.
+    if (e.kind === 'warden') {
+      const i = Swarm.plateAt(e, fromX, fromY);
+      return (e.state & (1 << i)) !== 0;
+    }
     return false;
+  }
+
+  /** Which armour plate a contact point lands on. Shared by block test and break. */
+  static plateAt(e: Enemy, x: number, y: number) {
+    const total = WARDEN_DEF[theme.id].plates;
+    const a = Math.atan2(y - e.y, x - e.x);
+    let rel = (a - e.shield) % TAU;
+    if (rel < 0) rel += TAU;
+    return Math.min(total - 1, Math.floor((rel / TAU) * total));
+  }
+
+  /** Live plates on a warden, for the HUD pips and the phase logic. */
+  static platesLeft(e: Enemy) {
+    return popcount(e.state);
+  }
+
+  /**
+   * How far into its charge telegraph a warden is, 0..1 — 0 when it is not
+   * telegraphing at all. Exists so the renderer can share the lancer's mark
+   * pass without learning the warden's flag bits: `state` holds an armour
+   * bitmask here, and the one place that knows the bit layout should stay the
+   * one place.
+   */
+  static wardenMark(e: Enemy) {
+    if (e.kind !== 'warden' || e.state & W_CHARGING) return 0;
+    const total = WARDEN_DEF[theme.id].plates;
+    if (popcount(e.state) > total / 3) return 0;
+    return clamp(1 - e.timer / 0.5, 0, 1);
+  }
+
+  /**
+   * Break one plate. True if it was standing. Every break flips the ring and
+   * turns it a little faster — killing armour makes the thing more dangerous,
+   * which is the only way a fight against a schedule stays a fight instead of
+   * becoming a metronome the player waits out.
+   */
+  static breakPlate(e: Enemy, i: number) {
+    const bit = 1 << i;
+    if (!(e.state & bit)) return false;
+    e.state &= ~bit;
+    e.spin = clamp(e.spin * WARDEN_RAGE, -WARDEN_SPIN_CAP, WARDEN_SPIN_CAP);
+    // The ring answers: it lurches a plate and a half along its own direction,
+    // slamming fresh armour over the wound. Without this the fight is two
+    // strikes long — break a plate, then put a second strike through the hole
+    // before the ring has moved it. With it, the hole you made is never where
+    // you made it, and the fight becomes what it was designed to be: reading a
+    // turning schedule for the moment a gap you paid for comes back around.
+    const slice = TAU / WARDEN_DEF[theme.id].plates;
+    e.shield += slice * 1.6 * (e.spin >= 0 ? 1 : -1);
+    return true;
   }
 
   /** Body radius as it should be tested against the player. */

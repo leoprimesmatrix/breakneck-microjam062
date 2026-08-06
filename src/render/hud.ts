@@ -9,6 +9,7 @@ import {
 import { clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine/math';
 import { SPECS, type EnemyKind } from '../game/enemies';
 import { ENEMY_COL, pad, type Game } from '../game/game';
+import { WARDEN_DEF, theme } from '../sectors';
 import { view } from '../viewport';
 import { drawEnemyPortrait } from './bodies';
 import { active } from './glow';
@@ -170,6 +171,28 @@ function drawWave(
     color: rgba(COL.ink, 0.95),
     slant: 0.06,
   });
+
+  // A boss wave replaces the progress bar with the boss's actual state: one
+  // pip per armour plate, going dark as they break. `waveProgress` assumes
+  // clear-the-field and reads 0% for a one-enemy wave, so rather than patch
+  // the arithmetic the readout swaps for one that tells the truth — and pips
+  // are simply better television than a bar.
+  const boss = game.boss;
+  if (boss) {
+    const total = WARDEN_DEF[theme.id].plates;
+    const gap = 3 * S;
+    const pw = Math.min(11 * S, (200 * S - gap * (total - 1)) / total);
+    const bw = pw * total + gap * (total - 1);
+    let px = cx - bw * 0.5;
+    const py = y - 5 * S;
+    for (let i = 0; i < total; i++) {
+      const live = (boss.state & (1 << i)) !== 0;
+      ctx.fillStyle = live ? rgba(COL.warden, 0.9) : rgba(COL.dim, 0.18);
+      ctx.fillRect(px, py, pw, 4 * S);
+      px += pw + gap;
+    }
+    return;
+  }
 
   const w = 200 * S;
   const h = 3 * S;
