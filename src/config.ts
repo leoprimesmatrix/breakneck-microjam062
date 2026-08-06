@@ -137,6 +137,12 @@ export const COL = {
   ward: [186, 126, 255] as RGB,
   lancer: [255, 86, 64] as RGB,
   spine: [255, 208, 96] as RGB,
+  // The warm band is getting crowded at seven, and that is fine: past five
+  // hues, silhouette does the identifying and colour only has to say *hostile*.
+  // The bulwark sits in the rose gap between the lancer and the seeder; the
+  // choir is nearly white-hot, the smallest body wearing the brightest voice.
+  bulwark: [232, 92, 128] as RGB,
+  choir: [255, 214, 178] as RGB,
 
   ink: [232, 240, 250] as RGB,
   dim: [124, 138, 164] as RGB,

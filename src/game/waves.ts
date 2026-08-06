@@ -148,6 +148,9 @@ export function waveDef(wave: number, rng: Rng): WaveDef {
     { kind: 'ward', cost: 3, max: 5 },
     { kind: 'lancer', cost: 3, max: 5 },
     { kind: 'spine', cost: 4, max: 3 },
+    // One choir spawn is three bodies, which the cost already prices in.
+    { kind: 'bulwark', cost: 4, max: 3 },
+    { kind: 'choir', cost: 3, max: 3 },
   ];
 
   const counts = new Map<EnemyKind, number>();

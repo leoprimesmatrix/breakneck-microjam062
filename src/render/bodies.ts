@@ -50,6 +50,8 @@ const UNIT: Record<EnemyKind, [number, number][]> = {
   ward: silhouette('ward', 1),
   lancer: silhouette('lancer', 1),
   spine: silhouette('spine', 1),
+  bulwark: silhouette('bulwark', 1),
+  choir: silhouette('choir', 1),
 };
 
 /**
@@ -67,6 +69,10 @@ const VIS: Record<EnemyKind, number> = {
   ward: 1.26,
   lancer: 1.2,
   spine: 1.2,
+  // The bulwark's drawn radius *is* its armour radius: the wall has to sit
+  // exactly where the strike stops, or the promise visibly lies.
+  bulwark: 1.28,
+  choir: 1.3,
 };
 
 /**
@@ -78,7 +84,7 @@ const VIS: Record<EnemyKind, number> = {
  * enemy looked like a figure in a robe rather than a machine behind a barricade.
  */
 const SHADOW: Record<EnemyKind, number> = {
-  mote: 1, seeder: 1, ward: 0.54, lancer: 1, spine: 1,
+  mote: 1, seeder: 1, ward: 0.54, lancer: 1, spine: 1, bulwark: 1, choir: 1,
 };
 
 /**
@@ -325,6 +331,8 @@ const DRAW: Record<EnemyKind, (ctx: CanvasRenderingContext2D, p: Pose) => void> 
   ward: drawWard,
   lancer: drawLancer,
   spine: drawSpine,
+  bulwark: drawBulwark,
+  choir: drawChoir,
 };
 
 export function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Game, alpha: number) {
@@ -373,7 +381,7 @@ export function drawEnemyBody(ctx: CanvasRenderingContext2D, e: Enemy, game: Gam
  * into the name beside it.
  */
 const PORTRAIT_OFF: Record<EnemyKind, number> = {
-  mote: 0, seeder: 0, ward: -0.42, lancer: -0.24, spine: -0.5,
+  mote: 0, seeder: 0, ward: -0.42, lancer: -0.24, spine: -0.5, bulwark: 0, choir: 0,
 };
 
 /**
@@ -392,6 +400,7 @@ export function drawEnemyPortrait(
     : kind === 'seeder' ? clock * 0.5
     : kind === 'lancer' ? Math.sin(clock * 0.8) * 0.35
     : kind === 'spine' ? 0
+    : kind === 'choir' ? Math.sin(clock * 1.2) * 0.3
     : clock * 0.25;
   ctx.save();
   ctx.translate(r * PORTRAIT_OFF[kind], 0);
@@ -870,4 +879,108 @@ function drawSpine(ctx: CanvasRenderingContext2D, p: Pose) {
   }
   ctx.globalCompositeOperation = 'source-over';
   ctx.restore();
+}
+
+// --------------------------------------------------------------------- bulwark
+/**
+ * A turning wall with a lamp inside it.
+ *
+ * The gap is the entire read, so everything here is built to make the gap loud:
+ * the armour is the darkest hull in the game, the two cut faces where it ends
+ * are the brightest edges, and the core shines *through* the opening as a beam.
+ * A player who has never seen one knows where the door is before they know what
+ * the thing is called — and knowing where the door is IS knowing what it is.
+ *
+ * `p.shield` is the gap's centre; the armour is drawn in that frame rather than
+ * in `p.rot`'s, because the behaviour sets them equal and the promise lives in
+ * `Swarm.blocks`, which reads `shield`. One source of truth, drawn.
+ */
+function drawBulwark(ctx: CanvasRenderingContext2D, p: Pose) {
+  const r = p.r;
+  const gap = 0.62; // BULWARK_GAP — the solver's number, restated for the eye
+  const inner = r * 0.6;
+
+  ctx.save();
+  ctx.rotate(p.shield);
+
+  // The armour band: an annular sector from one gap edge round to the other.
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 1.04, gap, TAU - gap);
+  ctx.arc(0, 0, inner, TAU - gap, gap, true);
+  ctx.closePath();
+  const lx = Math.cos(p.toP - p.shield);
+  const ly = Math.sin(p.toP - p.shield);
+  const g = ctx.createLinearGradient(-lx * r, -ly * r, lx * r, ly * r);
+  g.addColorStop(0, hullDark(p.col));
+  g.addColorStop(0.55, hullMid(p.col));
+  g.addColorStop(1, hullLit(p.col));
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  // Plate seams across the band, so it reads as segments of wall rather than
+  // as one moulded ring — and, quietly, as the warden's lesson in advance.
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 1; i < 6; i++) {
+    const a = gap + (i / 6) * (TAU - gap * 2);
+    ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
+    ctx.lineTo(Math.cos(a) * r * 1.04, Math.sin(a) * r * 1.04);
+  }
+  ctx.stroke();
+
+  // The cut faces at the gap: the brightest thing on the body. These are the
+  // door frame.
+  ctx.strokeStyle = rgba(p.col, 0.95 * p.alpha);
+  ctx.lineWidth = 2.2;
+  for (const s of [1, -1] as const) {
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(gap * s) * inner, Math.sin(gap * s) * inner);
+    ctx.lineTo(Math.cos(gap * s) * r * 1.04, Math.sin(gap * s) * r * 1.04);
+    ctx.stroke();
+  }
+
+  // The core, and its light escaping through the opening.
+  lens(ctx, 0, 0, r * 0.26, p.col, p.alpha, 1.15);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, r * 1.55, -gap * 0.82, gap * 0.82);
+  ctx.closePath();
+  ctx.fillStyle = rgba(p.col, 0.12 * p.alpha);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+}
+
+// ----------------------------------------------------------------------- choir
+/**
+ * One singer of a trio.
+ *
+ * Individually the simplest body in the game, deliberately: three of anything
+ * detailed is visual noise at this size, and the species' identity lives in the
+ * *formation*, not the body. What each one gets is a bell shape, a bright
+ * throat, and a soft voice-glow that swells in phase with its orbit — so the
+ * trio visibly sings in rounds, which is the only decoration the mechanic
+ * needs.
+ */
+function drawChoir(ctx: CanvasRenderingContext2D, p: Pose) {
+  const r = p.r;
+  ctx.save();
+  ctx.rotate(p.rot);
+  body(ctx, UNIT.choir, r, p.col, p.toP - p.rot, p.alpha, 2);
+  ctx.restore();
+
+  // The throat: the mouth of the bell, facing its travel.
+  lens(ctx, 0, 0, r * 0.3, p.col, p.alpha, 1);
+
+  // The voice. Phase-locked to the orbit (`age` drives both), so the three
+  // swell one after another — a round, sung in light.
+  ctx.globalCompositeOperation = 'lighter';
+  const sing = 0.5 + 0.5 * Math.sin(p.age * 4.35 + p.state * 2.09);
+  drawRadial(ctx, glowSprite(p.col, 0.5), 0, 0, r * (1.6 + sing * 1.1), p.alpha * (0.25 + sing * 0.45));
+  ctx.globalCompositeOperation = 'source-over';
 }

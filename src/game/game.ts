@@ -105,6 +105,8 @@ export const ENEMY_COL: Record<EnemyKind, RGB> = {
   ward: COL.ward,
   lancer: COL.lancer,
   spine: COL.spine,
+  bulwark: COL.bulwark,
+  choir: COL.choir,
 };
 
 export class Game {
@@ -1108,7 +1110,11 @@ export class Game {
 
     if (e.kind === 'seeder') this.swarm.burst(e, this.rng);
 
-    const power = e.kind === 'spine' ? 1.5 : e.kind === 'mote' ? 0.9 : 1.2;
+    const power =
+      e.kind === 'spine' ? 1.5
+      : e.kind === 'bulwark' ? 1.5
+      : e.kind === 'mote' || e.kind === 'choir' ? 0.9
+      : 1.2;
     const ang = Math.atan2(dy, dx);
     // The body breaks into its own edges first — *that* shape died, in its own
     // colour — and the generic debris underneath is thinned to make room.

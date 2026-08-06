@@ -13,7 +13,7 @@ import { terrain } from './terrain';
  * deep when it has one rule and one exception.
  */
 
-export type EnemyKind = 'mote' | 'seeder' | 'ward' | 'lancer' | 'spine';
+export type EnemyKind = 'mote' | 'seeder' | 'ward' | 'lancer' | 'spine' | 'bulwark' | 'choir';
 
 export interface EnemySpec {
   kind: EnemyKind;
@@ -65,6 +65,22 @@ export const SPECS: Record<EnemyKind, EnemySpec> = {
     r: 26,
     speed: 0,
     score: 300,
+  },
+  bulwark: {
+    kind: 'bulwark',
+    name: 'BULWARK',
+    rule: 'Its armour turns on its own. The gap is the shot.',
+    r: 30,
+    speed: 34,
+    score: 350,
+  },
+  choir: {
+    kind: 'choir',
+    name: 'CHOIR',
+    rule: 'Three bodies, one mind. They only line up for a moment.',
+    r: 11,
+    speed: 42,
+    score: 120,
   },
 };
 
@@ -171,6 +187,32 @@ export function silhouette(kind: EnemyKind, r: number): [number, number][] {
       }
       return pts;
     }
+    // The armour band itself: a C of plate, outer face and inner face, with the
+    // bite at +X. The only concave outline in the game, and it has to be — the
+    // shatter breaks a dead bulwark into curved slabs of wall, which is what it
+    // was, and a convex stand-in would shatter into pieces of something else.
+    case 'bulwark': {
+      const pts: [number, number][] = [];
+      const n = 9;
+      for (let i = 0; i <= n; i++) {
+        const a = BULWARK_GAP + (i / n) * (TAU - BULWARK_GAP * 2);
+        pts.push([Math.cos(a) * r * 1.04, Math.sin(a) * r * 1.04]);
+      }
+      for (let i = n; i >= 0; i--) {
+        const a = BULWARK_GAP + (i / n) * (TAU - BULWARK_GAP * 2);
+        pts.push([Math.cos(a) * r * 0.6, Math.sin(a) * r * 0.6]);
+      }
+      return pts;
+    }
+    // A bell. Small, rounded crown, flared mouth — an object that sings, at a
+    // size where anything more detailed would collapse into a blob. The flare
+    // matters: straight sides make a gem, and a gem reads as a pickup.
+    case 'choir':
+      return [
+        [0, -r * 1.1], [r * 0.42, -r * 0.82], [r * 0.52, -r * 0.1], [r * 0.66, r * 0.62],
+        [r * 0.94, r * 0.94], [r * 0.5, r * 1.02], [0, r * 1.06], [-r * 0.5, r * 1.02],
+        [-r * 0.94, r * 0.94], [-r * 0.66, r * 0.62], [-r * 0.52, -r * 0.1], [-r * 0.42, -r * 0.82],
+      ];
   }
 }
 
@@ -187,6 +229,18 @@ const LANCER_REST = 1.5;
 export const SPINE_PERIOD = 2.3;
 const ORB_SPEED = 205;
 export const ORB_R = 10;
+
+/**
+ * Half-width of the bulwark's opening. Wider than it looks like it should be:
+ * the fair version of a moving keyhole errs toward the key.
+ */
+export const BULWARK_GAP = 0.62;
+/** How fast the armour turns. Constant, and never toward you — that is the ward. */
+const BULWARK_SPIN = 0.8;
+
+/** Orbit radius and angular rate of a choir trio. */
+export const CHOIR_R = 54;
+const CHOIR_RATE = 1.45;
 
 export interface Enemy {
   kind: EnemyKind;
@@ -274,7 +328,7 @@ export class Swarm {
     return n;
   }
 
-  spawn(kind: EnemyKind, x: number, y: number, rng: Rng, telegraph: number, speedMul: number) {
+  private alloc(kind: EnemyKind, x: number, y: number, rng: Rng, telegraph: number, speedMul: number) {
     const spec = SPECS[kind];
     const e = this.list.find((o) => !o.alive) ?? (this.list.push(blank()), this.list[this.list.length - 1]);
     e.kind = kind;
@@ -296,6 +350,37 @@ export class Swarm {
     e.markY = 0;
     e.flash = 0;
     e.speedMul = speedMul;
+    return e;
+  }
+
+  spawn(kind: EnemyKind, x: number, y: number, rng: Rng, telegraph: number, speedMul: number) {
+    const e = this.alloc(kind, x, y, rng, telegraph, speedMul);
+
+    // A bulwark's armour turns at a constant rate, never toward you — that is
+    // the ward's move, and the two must not blur. Direction is rolled once.
+    if (kind === 'bulwark') e.spin = rng() < 0.5 ? -BULWARK_SPIN : BULWARK_SPIN;
+
+    // A choir is one spawn that is three bodies. The trio shares an orbit
+    // centre carried in `markX/markY` — free on non-lancers — and each body
+    // knows only its index; everything else about the formation is derived
+    // identically by all three, which is what keeps them one organism without
+    // any of them holding a pointer to another.
+    if (kind === 'choir') {
+      e.markX = x;
+      e.markY = y;
+      for (let i = 1; i < 3; i++) {
+        const s = this.alloc('choir', x, y, rng, telegraph, speedMul);
+        s.state = i;
+        s.markX = x;
+        s.markY = y;
+        s.seed = e.seed;
+        const ph = i * (TAU / 3);
+        s.x = x + Math.cos(ph) * CHOIR_R;
+        s.y = y + Math.sin(ph) * CHOIR_R;
+      }
+      e.x = x + CHOIR_R;
+    }
+
     return e;
   }
 
@@ -445,6 +530,41 @@ export class Swarm {
           }
           break;
         }
+
+        case 'bulwark': {
+          // Slow advance, indifferent armour. The gap's angle is `shield`, and
+          // it turns at the constant rate set at spawn: the whole species is
+          // the difference between a wall that reacts to you and a wall that
+          // simply has a schedule. You cannot outflank a schedule; you read it.
+          e.vx += (nx * spd - e.vx) * (1 - Math.exp(-1.4 * dt));
+          e.vy += (ny * spd - e.vy) * (1 - Math.exp(-1.4 * dt));
+          e.shield += e.spin * dt;
+          e.rot = e.shield;
+          break;
+        }
+
+        case 'choir': {
+          // The trio's shared centre drifts toward you; each body carries its
+          // own copy and advances it with identical arithmetic, so the copies
+          // can never disagree. Clamped so the orbit itself cannot press a
+          // body into a wall.
+          const cdx = this.targetX - e.markX;
+          const cdy = this.targetY - e.markY;
+          const cd = Math.hypot(cdx, cdy) || 1;
+          const m = CHOIR_R + e.r + 10;
+          e.markX = clamp(e.markX + (cdx / cd) * spd * dt, m, W - m);
+          e.markY = clamp(e.markY + (cdy / cd) * spd * dt, m, H - m);
+          const ph = e.state * (TAU / 3) + e.age * CHOIR_RATE + e.seed;
+          const px = e.markX + Math.cos(ph) * CHOIR_R;
+          const py = e.markY + Math.sin(ph) * CHOIR_R;
+          // Velocity is set so the shared integration below lands exactly on
+          // the orbit point — the body still *has* a velocity, which is what
+          // keeps the drift lean and the shatter direction honest.
+          e.vx = (px - e.x) / Math.max(dt, 1e-4);
+          e.vy = (py - e.y) / Math.max(dt, 1e-4);
+          e.rot = ph + Math.PI * 0.5;
+          break;
+        }
       }
 
       e.x += e.vx * dt;
@@ -514,9 +634,19 @@ export class Swarm {
    * outcome and dealt another.
    */
   static blocks(e: Enemy, fromX: number, fromY: number) {
-    if (e.kind !== 'ward') return false;
-    const a = Math.atan2(fromY - e.y, fromX - e.x);
-    return Math.abs(angleDelta(e.shield, a)) <= WARD_ARC;
+    if (e.kind === 'ward') {
+      const a = Math.atan2(fromY - e.y, fromX - e.x);
+      return Math.abs(angleDelta(e.shield, a)) <= WARD_ARC;
+    }
+    // The bulwark is the ward inverted: armoured everywhere *except* an arc,
+    // and the arc belongs to a schedule rather than to you. Same pure function
+    // of (enemy, point), same single caller, same guarantee that the preview
+    // and the strike cannot disagree about it.
+    if (e.kind === 'bulwark') {
+      const a = Math.atan2(fromY - e.y, fromX - e.x);
+      return Math.abs(angleDelta(e.shield, a)) > BULWARK_GAP;
+    }
+    return false;
   }
 
   /** Body radius as it should be tested against the player. */
