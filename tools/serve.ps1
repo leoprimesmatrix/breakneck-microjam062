@@ -108,6 +108,15 @@ try {
           $alt = Resolve-Path-Safe $Repo (Join-Path 'public' $rel)
           if ($alt -and (Test-Path $alt -PathType Leaf)) { $full = $alt }
         }
+        # A build asks for `music/x.mp3` relative to itself, which is right on
+        # itch.io where index.html sits beside music/ — and wrong here, where it
+        # is served out of /dist/ and resolves to /dist/music/x.mp3. Without
+        # this every audition of a build 404s its whole soundtrack and looks
+        # like a bug in the bundler.
+        if ($full -and -not (Test-Path $full -PathType Leaf) -and $rel -like 'dist/*') {
+          $alt = Resolve-Path-Safe $Repo (Join-Path 'public' $rel.Substring(5))
+          if ($alt -and (Test-Path $alt -PathType Leaf)) { $full = $alt }
+        }
       }
 
       if (-not $full) {
