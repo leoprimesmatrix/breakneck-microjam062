@@ -46,12 +46,39 @@ export const DRIFT_DRAG = 3.4;
 export const FOCUS_MAX = 100;
 export const FOCUS_DRAIN = 46; // per second of aiming
 export const FOCUS_REGEN = 9; // per second while not aiming
-export const FOCUS_PER_KILL = 22;
+/**
+ * Refund per kill. Was 22.
+ *
+ * The economy was very nearly self-funding, which meant it was not really an
+ * economy. A full meter is 2.17 real seconds of holding; at 22 a three-kill
+ * strike handed back 1.43 of them — two thirds of the meter for a shot most
+ * players were going to take anyway. Greed was not a gamble, it was the
+ * dominant strategy, and the resource that is supposed to make thinking time
+ * cost something never actually charged for it.
+ */
+export const FOCUS_PER_KILL = 15;
 export const FOCUS_WAVE_REFILL = 55;
+
+/**
+ * Drain climbs the longer a single hold runs, reaching this multiple at
+ * `FOCUS_RAMP_FULL` seconds. A quick read costs about what it always did;
+ * shopping the whole board for the perfect line is what gets expensive.
+ */
+export const FOCUS_RAMP_MAX = 2.1;
+export const FOCUS_RAMP_FULL = 2.2;
 
 /** Time scale while aiming with focus left, and once it has run dry. */
 export const AIM_TIMESCALE = 0.11;
-export const AIM_TIMESCALE_DRY = 0.62;
+/**
+ * Was 0.62 — which is to say running out of focus cost you almost nothing:
+ * 38% dilation, free, forever, with no reason to ever stop holding.
+ *
+ * It also inverted the audio. `setIntensity` treats anything under 0.45 as
+ * bullet time, so at 0.62 the music's low-pass and the sub drone *released* at
+ * the exact moment the meter emptied — the game sounded relieved when you ran
+ * out. Above the threshold now, so empty reads as empty on both channels.
+ */
+export const AIM_TIMESCALE_DRY = 0.88;
 /** Seconds to ease between time scales. Snapping is what makes slow-mo cheap. */
 export const TIMESCALE_EASE = 0.085;
 

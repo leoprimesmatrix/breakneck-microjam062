@@ -34,9 +34,21 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
       groups: [{ kind: 'mote', count: 3, at: 0 }, { kind: 'mote', count: 2, at: 3.2 }],
     },
     {
+      // The second kind arrives here rather than in wave three.
+      //
+      // Sector I ran 29 motes out of 32 bodies before the first warden — 87% of
+      // an entire sector spent teaching one behaviour, in the four waves a new
+      // player is deciding whether the game has anything else in it. The ward
+      // is the right second lesson: it is the first body that cannot simply be
+      // driven through, and the aim preview already explains it for free by
+      // drawing the block before you commit.
       title: 'SWARM',
       speedMul: 0.86,
-      groups: [{ kind: 'mote', count: 4, at: 0 }, { kind: 'mote', count: 4, at: 2.6 }],
+      groups: [
+        { kind: 'mote', count: 4, at: 0 },
+        { kind: 'ward', count: 1, at: 2.2 },
+        { kind: 'mote', count: 3, at: 3.4 },
+      ],
     },
     {
       title: 'BLOOM',
@@ -48,9 +60,21 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
       ],
     },
     {
+      // Escorts, on a schedule.
+      //
+      // A warden's first phase does nothing but walk at 24 units per second and
+      // block, so a boss wave that spawned two or three bodies total left the
+      // player alone in an empty room for four uncontested strikes. The escorts
+      // arrive in waves through the fight so there is always something else on
+      // the board — the boss supplies the puzzle, they supply the pressure.
       title: 'THE FIRST WARDEN',
       speedMul: 0.94,
-      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'mote', count: 3, at: 7 }],
+      groups: [
+        { kind: 'warden', count: 1, at: 0 },
+        { kind: 'mote', count: 3, at: 4 },
+        { kind: 'mote', count: 3, at: 11 },
+        { kind: 'seeder', count: 1, at: 17 },
+      ],
     },
   ],
 
@@ -83,7 +107,12 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
     {
       title: 'WARDEN IN THE DARK',
       speedMul: 1.02,
-      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'choir', count: 1, at: 5.5 }],
+      groups: [
+        { kind: 'warden', count: 1, at: 0 },
+        { kind: 'choir', count: 1, at: 4 },
+        { kind: 'mote', count: 3, at: 10 },
+        { kind: 'choir', count: 1, at: 16 },
+      ],
     },
   ],
 
@@ -120,6 +149,7 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
         { kind: 'warden', count: 1, at: 0 },
         { kind: 'spine', count: 1, at: 4.5 },
         { kind: 'mote', count: 3, at: 8 },
+        { kind: 'lancer', count: 2, at: 15 },
       ],
     },
   ],
@@ -157,7 +187,12 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
     {
       title: 'LATTICE WARDEN',
       speedMul: 1.18,
-      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'lancer', count: 2, at: 5.5 }],
+      groups: [
+        { kind: 'warden', count: 1, at: 0 },
+        { kind: 'lancer', count: 2, at: 4.5 },
+        { kind: 'ward', count: 2, at: 11 },
+        { kind: 'lancer', count: 2, at: 18 },
+      ],
     },
   ],
 
@@ -189,7 +224,12 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
     {
       title: 'CONDEMNED WARDEN',
       speedMul: 1.26,
-      groups: [{ kind: 'warden', count: 1, at: 0 }, { kind: 'bulwark', count: 1, at: 5 }],
+      groups: [
+        { kind: 'warden', count: 1, at: 0 },
+        { kind: 'bulwark', count: 1, at: 4 },
+        { kind: 'choir', count: 1, at: 10 },
+        { kind: 'seeder', count: 2, at: 17 },
+      ],
     },
   ],
 
@@ -231,6 +271,8 @@ const SCRIPT: Record<SectorId, WaveDef[]> = {
         { kind: 'warden', count: 1, at: 0 },
         { kind: 'choir', count: 1, at: 4.5 },
         { kind: 'lancer', count: 2, at: 9 },
+        { kind: 'ward', count: 2, at: 15 },
+        { kind: 'spine', count: 1, at: 21 },
       ],
     },
   ],

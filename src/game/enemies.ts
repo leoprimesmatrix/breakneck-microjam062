@@ -1,6 +1,6 @@
 import { PLAYER_R } from '../config';
 import { TAU, angleDelta, clamp, randRange, type Rng } from '../engine/math';
-import { WARDEN_DEF, theme } from '../sectors';
+import { WARDEN_DEF, theme, wardenPlates, wardenSpin } from '../sectors';
 import { view } from '../viewport';
 import { terrain } from './terrain';
 
@@ -425,10 +425,9 @@ export class Swarm {
     // `speedMul`: the base is a table lookup, so the sector multiplying it
     // costs nothing and lives in data.
     if (kind === 'warden') {
-      const def = WARDEN_DEF[theme.id];
-      e.r = def.r;
-      e.spin = def.spin;
-      e.state = (1 << def.plates) - 1;
+      e.r = WARDEN_DEF[theme.id].r;
+      e.spin = wardenSpin();
+      e.state = (1 << wardenPlates()) - 1;
       e.timer = 2;
     }
 
@@ -618,7 +617,7 @@ export class Swarm {
         case 'warden': {
           // Phases fall out of how much armour is left — no phase machine,
           // just popcount read against the plate total the ring started with.
-          const total = WARDEN_DEF[theme.id].plates;
+          const total = wardenPlates();
           const left = popcount(e.state);
           const p3 = left <= total / 3;
           const p2 = left <= (total * 2) / 3;
@@ -805,7 +804,7 @@ export class Swarm {
 
   /** Which armour plate a contact point lands on. Shared by block test and break. */
   static plateAt(e: Enemy, x: number, y: number) {
-    const total = WARDEN_DEF[theme.id].plates;
+    const total = wardenPlates();
     const a = Math.atan2(y - e.y, x - e.x);
     let rel = (a - e.shield) % TAU;
     if (rel < 0) rel += TAU;
@@ -826,7 +825,7 @@ export class Swarm {
    */
   static wardenMark(e: Enemy) {
     if (e.kind !== 'warden' || e.state & W_CHARGING) return 0;
-    const total = WARDEN_DEF[theme.id].plates;
+    const total = wardenPlates();
     if (popcount(e.state) > total / 3) return 0;
     return clamp(1 - e.timer / 0.5, 0, 1);
   }
@@ -848,7 +847,7 @@ export class Swarm {
     // before the ring has moved it. With it, the hole you made is never where
     // you made it, and the fight becomes what it was designed to be: reading a
     // turning schedule for the moment a gap you paid for comes back around.
-    const slice = TAU / WARDEN_DEF[theme.id].plates;
+    const slice = TAU / wardenPlates();
     e.shield += slice * 1.6 * (e.spin >= 0 ? 1 : -1);
     return true;
   }

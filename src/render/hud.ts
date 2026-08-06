@@ -9,7 +9,14 @@ import {
 import { clamp, clamp01, damp, easeOutCubic, easeOutQuint } from '../engine/math';
 import { SPECS, type EnemyKind } from '../game/enemies';
 import { ENEMY_COL, pad, type Game } from '../game/game';
-import { ROMAN, SECTOR_ORDER, SECTOR_WAVES, SECTORS, WARDEN_DEF, theme } from '../sectors';
+import {
+  ROMAN,
+  SECTOR_ORDER,
+  SECTOR_WAVES,
+  SECTORS,
+  theme,
+  wardenPlates,
+} from '../sectors';
 import { view } from '../viewport';
 import { drawEnemyPortrait } from './bodies';
 import { active } from './glow';
@@ -180,7 +187,7 @@ function drawWave(
   // are simply better television than a bar.
   const boss = game.boss;
   if (boss) {
-    const total = WARDEN_DEF[theme.id].plates;
+    const total = wardenPlates();
     const gap = 3 * S;
     const pw = Math.min(11 * S, (200 * S - gap * (total - 1)) / total);
     const bw = pw * total + gap * (total - 1);

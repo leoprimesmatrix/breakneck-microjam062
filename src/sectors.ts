@@ -536,6 +536,40 @@ export const WARDEN_DEF: Record<SectorId, { plates: number; spin: number; r: num
   crucible: { plates: 16, spin: 0.98, r: 64 },
 };
 
+/**
+ * How many times the run has been round the six rooms. Zero on a campaign.
+ *
+ * Endless was strictly *easier* on every lap after the first, because
+ * `WARDEN_DEF` is keyed by sector alone: having just beaten the sixteen-plate
+ * crucible warden at wave 24, you met the ten-plate range warden again at 28.
+ * The deepest fight in the game was immediately followed by the shallowest.
+ *
+ * A module-level lap rather than a parameter for the same reason `theme` is a
+ * singleton — the warden's size is read from five places across three files
+ * (spawn, the phase thresholds, the plate arithmetic, the body, and the HUD
+ * pips), and all five have to agree or the picture stops being the hitbox.
+ */
+let wardenLap = 0;
+
+export function setWardenLap(n: number) {
+  wardenLap = Math.max(0, n);
+}
+
+/**
+ * Plates on this room's warden, this lap. Capped at 24: `state` carries the
+ * armour as a bitmask in bits 0-23, and a 25th plate would land on the
+ * charging flag.
+ */
+export function wardenPlates() {
+  return Math.min(24, WARDEN_DEF[theme.id].plates + wardenLap * 2);
+}
+
+/** Ring rate, faster each lap and signed as the room authored it. */
+export function wardenSpin() {
+  const s = WARDEN_DEF[theme.id].spin;
+  return s * (1 + wardenLap * 0.16);
+}
+
 /** The room being drawn. Read by `render/`; written only by `setSector`. */
 export const theme: SectorTheme = { ...SECTORS.range };
 

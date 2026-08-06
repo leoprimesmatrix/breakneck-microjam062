@@ -9,7 +9,7 @@ import {
   type EnemyKind,
 } from '../game/enemies';
 import { ENEMY_COL, type Game } from '../game/game';
-import { WARDEN_DEF, theme } from '../sectors';
+import { wardenPlates } from '../sectors';
 import { drawRadial, flareSprite, glowSprite, haloSprite } from './glow';
 
 /**
@@ -1006,7 +1006,7 @@ function drawChoir(ctx: CanvasRenderingContext2D, p: Pose) {
  */
 function drawWarden(ctx: CanvasRenderingContext2D, p: Pose) {
   const r = p.r;
-  const total = WARDEN_DEF[theme.id].plates;
+  const total = wardenPlates();
   const slice = TAU / total;
   const inner = r * 0.66;
   const left = (() => {

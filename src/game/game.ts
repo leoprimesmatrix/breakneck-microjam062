@@ -9,6 +9,8 @@ import {
   FOCUS_DRAIN,
   FOCUS_MAX,
   FOCUS_PER_KILL,
+  FOCUS_RAMP_FULL,
+  FOCUS_RAMP_MAX,
   FOCUS_REGEN,
   FOCUS_WAVE_REFILL,
   GRAZE_BAND,
@@ -31,9 +33,9 @@ import { Audio } from '../engine/audio';
 import { camera } from '../engine/camera';
 import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
-import { TAU, clamp, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
+import { TAU, clamp, clamp01, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
 import { Particles } from '../engine/particles';
-import { SECTOR_ORDER, SECTOR_WAVES, SECTORS, setSector, theme } from '../sectors';
+import { SECTOR_ORDER, SECTOR_WAVES, SECTORS, setSector, setWardenLap, theme } from '../sectors';
 import type { UiHit } from '../settings';
 import { view } from '../viewport';
 import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
@@ -163,6 +165,8 @@ export class Game {
   /** Kill count the aim line last announced; see the lock tick in `stepPlay`. */
   private aimKillsPrev = 0;
   private lockCooldown = 0;
+  /** Real seconds inside the current uninterrupted hold; drives the drain ramp. */
+  private holdTime = 0;
 
   score = 0;
   combo = 1;
@@ -411,6 +415,16 @@ export class Game {
       sector: SECTOR_ORDER[ix % SECTOR_ORDER.length],
       waveIn: ((absWave - 1) % SECTOR_WAVES) + 1,
       heat: Math.max(0, absWave - SECTOR_ORDER.length * SECTOR_WAVES),
+      /**
+       * Which time around the six rooms this is. Zero on the campaign lap.
+       *
+       * Endless used to be strictly *easier* on every lap after the first:
+       * `WARDEN_DEF` is keyed by sector alone, so having just beaten the
+       * sixteen-plate crucible warden at wave 24 you met the ten-plate range
+       * warden again at 28. The deepest fight in the game was followed by the
+       * shallowest one.
+       */
+      lap: Math.floor((absWave - 1) / (SECTOR_ORDER.length * SECTOR_WAVES)),
     };
   }
 
@@ -422,6 +436,7 @@ export class Game {
     this.sectorCard = 0;
     this.sectorSwapped = true;
     setSector(SECTOR_ORDER[this.sectorIx]);
+    setWardenLap(0);
     // The room's sound arrives with the room; a run picked up at the derelict
     // also asks for its track, which lands whenever the queue next buffers.
     this.audio.onSector(theme);
@@ -504,7 +519,12 @@ export class Game {
 
     // Every fourth wave hands back a hull point. Long runs should be winnable
     // after a mistake, not permanently poisoned by one.
-    if (this.wave % 4 === 0 && this.player.hull < MAX_HULL) {
+    //
+    // But only from one hull, not from two. Refilling at two meant every single
+    // mistake in a sector was refunded on the boss wave, so the first hit never
+    // cost anything and the hull bar spent the whole campaign pinned at full.
+    // At one, the refund is a genuine reprieve rather than a rebate.
+    if (this.wave % 4 === 0 && this.player.hull <= MAX_HULL - 2) {
       this.player.hull++;
       this.pushPopup(this.player.x, this.player.y - 42, '+1 HULL', '', 'good', COL.hull, 1.1);
       this.audio.onHeal();
@@ -978,10 +998,19 @@ export class Game {
 
     // --- focus burns on REAL time. Charging in dilated time would otherwise be
     //     nearly free, and the whole economy would collapse.
+    //
+    //     And it accelerates. A flat drain prices a two-second shop at exactly
+    //     twice a one-second glance, which is the wrong shape: the first read
+    //     of the board is the shot, and everything after it is shopping. The
+    //     ramp leaves a quick look costing about what it always did and makes
+    //     standing in bullet time hunting the perfect angle the expensive act.
     if (this.aiming) {
-      p.focus = Math.max(0, p.focus - FOCUS_DRAIN * dtReal);
-    } else if (!p.striking) {
-      p.focus = Math.min(FOCUS_MAX, p.focus + FOCUS_REGEN * dtReal);
+      this.holdTime += dtReal;
+      const ramp = 1 + (FOCUS_RAMP_MAX - 1) * clamp01(this.holdTime / FOCUS_RAMP_FULL);
+      p.focus = Math.max(0, p.focus - FOCUS_DRAIN * ramp * dtReal);
+    } else {
+      this.holdTime = 0;
+      if (!p.striking) p.focus = Math.min(FOCUS_MAX, p.focus + FOCUS_REGEN * dtReal);
     }
 
     p.tick(dtReal, this.aiming);
@@ -1607,6 +1636,9 @@ export class Game {
     const slot = this.waveSlot(this.wave + 1);
     this.sectorIx = slot.ix;
     setSector(slot.sector);
+    // The lap travels with the room, so an endless second pass through the
+    // range meets a bigger, faster warden than the campaign's did.
+    setWardenLap(slot.lap);
     this.rebuildRoom();
     // The room's acoustics change with its walls, and the soundtrack takes
     // the cut if — and only if — its next deck is genuinely ready.
