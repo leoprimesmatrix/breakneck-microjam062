@@ -365,10 +365,19 @@ function drawHull(ctx: CanvasRenderingContext2D, p: ShipState) {
   const detail = alpha * (1 - p.stretch * 0.85);
 
   // The airframe sheds as the strike takes over. Stretching every part equally
-  // dragged the wings out into four long dark bars — a comb, not a lance. The
-  // fuselage carries the shape on its own at speed, which is also the honest
-  // reading: the ship stops being a ship and becomes the line.
+  // dragged the wings out into four long dark bars — a comb, not a lance.
   const frame = alpha * (1 - p.stretch * 0.8);
+
+  // …and the fuselage did exactly the same thing, which the wing fix missed
+  // because there is only one of it. An opaque plate pulled to three and a bit
+  // times its length is a black spike, and the title screen flies this straight
+  // across a white wordmark, where it reads as a scratch on the glass.
+  //
+  // So the *dark* of the ship sheds with the stretch and the *light* of it does
+  // not. What elongates is the lit outline, the leading edges and the canopy —
+  // the ship stops being a ship and becomes the line, which is what the beam
+  // under it is already drawing. Every opaque fill in here is keyed to this.
+  const body = alpha * (1 - p.stretch * 0.9);
 
   // The underside of the descending wing, showing as the ship rolls.
   if (Math.abs(bank) > 0.08 && frame > 0.02) {
@@ -396,7 +405,18 @@ function drawHull(ctx: CanvasRenderingContext2D, p: ShipState) {
   }
   ctx.stroke();
 
-  part(ctx, FUSE, HULL_FUSE, rgba(COL.player, 0.95), lw(0.13), lean * 0.35);
+  // Fill and outline are split rather than going through `part`, because they
+  // fade at different rates: the plate is the dark being shed, the outline is
+  // the light being kept. Together they turn the spike into a hollow shape that
+  // still reads as an airframe right up until the beam takes over.
+  poly(ctx, FUSE, lean * 0.35);
+  ctx.globalAlpha = body;
+  ctx.fillStyle = HULL_FUSE;
+  ctx.fill();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = rgba(COL.player, 0.95);
+  ctx.lineWidth = lw(0.13);
+  ctx.stroke();
 
   // Hot leading edges. Drawn over the closed outlines, wider and whiter — but
   // only just. At the nose the two runs converge on a single point, so any extra
@@ -439,12 +459,18 @@ function drawHull(ctx: CanvasRenderingContext2D, p: ShipState) {
   // Filled *and* stroked with the same dark: a stroke inflates a shape evenly in
   // every direction, where scaling a copy up would push the pointed ends much
   // further than the sides and leave a dark spike sticking into the nose.
+  //
+  // It is also the second-biggest opaque shape on the ship, so it sheds with
+  // the stretch alongside the fuselage — otherwise the hole punched for the
+  // cockpit stretches into a dark spike of its own inside the lance.
   poly(ctx, CANOPY, lean);
+  ctx.globalAlpha = body;
   ctx.fillStyle = 'rgba(5,8,13,1)';
   ctx.strokeStyle = 'rgba(5,8,13,1)';
   ctx.lineWidth = lw(0.13);
   ctx.fill();
   ctx.stroke();
+  ctx.globalAlpha = alpha;
 
   ctx.globalCompositeOperation = 'lighter';
   poly(ctx, CANOPY, lean);
