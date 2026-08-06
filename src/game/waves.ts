@@ -359,13 +359,26 @@ export class Director {
    * general vicinity, and stay off the walls — nothing should ever materialise
    * on top of you, and nothing should materialise somewhere you cannot see.
    */
+  /**
+   * How many bodies arrived in the last `update`, and where the last one came
+   * in. Read by the game to sound the arrival: a spawn used to make no noise
+   * at all, which meant the one event that can invalidate the shot you are
+   * currently lining up announced itself only if you happened to be looking
+   * at that corner of the room.
+   */
+  justSpawned = 0;
+  lastSpawnX = 0;
+
   update(dt: number, swarm: Swarm, rng: Rng, px: number, py: number) {
     this.clock += dt;
+    this.justSpawned = 0;
     while (this.queue.length && this.queue[0].at <= this.clock) {
       const item = this.queue.shift()!;
       const p = pickSpawn(rng, px, py);
       swarm.spawn(item.kind, p.x, p.y, rng, SPAWN_TELEGRAPH, this.speedMul);
       this.spawned++;
+      this.justSpawned++;
+      this.lastSpawnX = p.x;
     }
   }
 }

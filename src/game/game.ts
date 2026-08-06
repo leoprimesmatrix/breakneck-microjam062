@@ -11,6 +11,7 @@ import {
   FOCUS_PER_KILL,
   FOCUS_REGEN,
   FOCUS_WAVE_REFILL,
+  GRAZE_BAND,
   HINT_CARD_TIME,
   HURT_KNOCKBACK,
   IFRAME_TIME,
@@ -539,7 +540,7 @@ export class Game {
       this.juice.addShake(20);
       this.particles.ring(this.player.x, this.player.y, COL.strike, 340, 0.9, 6);
       this.particles.ring(this.player.x, this.player.y, COL.playerCore, 220, 0.7, 4);
-      this.audio.onWaveClear();
+      this.audio.onVictory();
     } else {
       this.audio.onDeath();
       this.juice.addHitstop(0.24);
@@ -920,7 +921,13 @@ export class Game {
 
   private stepDead(dtReal: number) {
     this.deadTime += dtReal;
-    const dt = dtReal * 0.35;
+    // `endRun` asks for 0.9s of slow motion on a death and 1.1s on a victory,
+    // and until now nothing read it: this line was a bare `dtReal * 0.35` and
+    // `slowScale` is only consulted in `stepPlay`, which a dead player is no
+    // longer in. The two most dramatic moments in the game were setting up
+    // their own slow motion and then throwing it away. Multiplying keeps the
+    // old 0.35 settling speed and adds the drop in front of it.
+    const dt = dtReal * 0.35 * this.juice.slowScale;
     this.swarm.targetX = this.player.x;
     this.swarm.targetY = this.player.y;
     this.swarm.update(dt);
@@ -1067,6 +1074,9 @@ export class Game {
     }
 
     this.director.update(dt, this.swarm, this.rng, p.x, p.y);
+    // One cue per frame however many arrived together, so a group of six does
+    // not stack into a thud that outweighs a kill.
+    if (this.director.justSpawned > 0) this.audio.onSpawn(this.panAt(this.director.lastSpawnX));
     this.noticeNewKinds();
 
     // --- damage
@@ -1259,8 +1269,12 @@ export class Game {
     // The first is special-cased because the old curve gave it 44 ms — two and
     // a half frames, a hiccup — while a *blocked* strike got 100 ms. Failure
     // must never land harder than success.
+    // Stacked rather than maxed. At 3050 units per second a strike puts several
+    // kills inside a single 8ms step, and `addHitstop` takes the max — so five
+    // simultaneous kills froze for 85ms, exactly as long as one. The cap keeps
+    // a huge chain from becoming a pause.
     const n = this.player.strikeKills;
-    this.juice.addHitstop(n === 1 ? 0.085 : Math.max(0.016, 0.055 - n * 0.006));
+    this.juice.stackHitstop(n === 1 ? 0.085 : Math.max(0.016, 0.055 - n * 0.006), 0.26);
     this.juice.addShake(8 + Math.min(12, n * 2));
     this.juice.addFlash(0.1 + Math.min(0.16, n * 0.03), col);
     // Each kill tugs the camera along the strike axis. addKick is additive, so
@@ -1269,6 +1283,18 @@ export class Game {
     this.juice.addKick(dx, dy, 3.5);
     this.juice.addFringe(0.35);
     this.audio.onKill(e.kind, n, this.combo, this.panAt(e.x));
+
+    // The blow that empties the room.
+    //
+    // `clearWave` fires a frame later off `liveCount === 0`, so the kill that
+    // actually ends a wave was landing as an ordinary kill and the celebration
+    // arrived detached from the thing that caused it. Sticking the extra weight
+    // on the kill itself is what joins them back up.
+    if (this.director.emptied && this.swarm.liveCount === 0) {
+      this.juice.stackHitstop(0.1, 0.3);
+      this.juice.addPunch(0.1);
+      this.particles.ring(e.x, e.y, COL.playerCore, 150, 0.4, 3);
+    }
 
     if (this.runs < 3 && this.kills === 1) {
       if (this.moveTaught > 0) this.focusPending = true;
@@ -1372,12 +1398,57 @@ export class Game {
     this.audio.onWall(this.panAt(x));
   }
 
+  /**
+   * The line went past something and did not take it.
+   *
+   * `Enemy.flash` has carried the comment "Flash on near-miss / spawn" since
+   * the jam and was only ever set by a block or a plate break — the near-miss
+   * half was specified and never built. It is worth building because
+   * positioning is the deepest thing in this design (your strike direction is
+   * also your only movement) and nothing in the game acknowledged it.
+   *
+   * Run once when the strike ends, over the whole travelled segment, so it
+   * costs one pass across the swarm per strike rather than per frame. Purely
+   * cosmetic: it flashes, it ticks, it changes no outcome.
+   */
+  private markGrazes(x0: number, y0: number, x1: number, y1: number) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len2 = dx * dx + dy * dy;
+    if (len2 < 1) return;
+    let closest = -1;
+    let closestX = 0;
+    for (const e of this.swarm.list) {
+      if (!e.alive || e.spawn > 0) continue;
+      // Distance from the enemy to the segment actually travelled.
+      const t = clamp(((e.x - x0) * dx + (e.y - y0) * dy) / len2, 0, 1);
+      const d = Math.hypot(e.x - (x0 + dx * t), e.y - (y0 + dy * t));
+      const band = e.r + PLAYER_R + GRAZE_BAND;
+      if (d > band || d < e.r + PLAYER_R) continue;
+      const k = 1 - (d - e.r - PLAYER_R) / GRAZE_BAND;
+      e.flash = Math.max(e.flash, 0.55 * k);
+      if (k > closest) {
+        closest = k;
+        closestX = e.x;
+      }
+    }
+    // One tick for the whole strike, at the nearest thing missed. Four separate
+    // ticks would read as four hits, which is the one thing it must not do.
+    if (closest > 0) {
+      this.audio.onGraze(this.panAt(closestX));
+      this.juice.addFringe(0.12 + closest * 0.16);
+    }
+  }
+
   private finishStrike() {
     const p = this.player;
     const plan = p.plan;
     const n = p.strikeKills;
 
-    if (plan) this.addScar(plan.x0, plan.y0, p.x, p.y);
+    if (plan) {
+      this.addScar(plan.x0, plan.y0, p.x, p.y);
+      this.markGrazes(plan.x0, plan.y0, p.x, p.y);
+    }
 
     if (plan && plan.hitWall && !plan.blocked) {
       // A ship at full strike speed meeting a steel wall. The camera slams
@@ -1450,6 +1521,10 @@ export class Game {
     const p = this.player;
     p.hull--;
     p.iframe = IFRAME_TIME;
+    // Losing a chain to a hit was completely silent: `onComboLost` only ever
+    // fired on the 3-second timeout, so the single most expensive way to lose
+    // a combo was also the only way you were never told about it.
+    if (this.combo > 2) this.audio.onComboLost();
     this.combo = 1;
 
     const a = Math.atan2(p.y - fromY, p.x - fromX);
@@ -1490,7 +1565,15 @@ export class Game {
       COL.hull,
       1.15,
     );
-    this.juice.addFlash(0.2, COL.hull);
+    // A wave clear used to be the weakest-feeling positive event in the game:
+    // one 0.2 flash and a popup, with no shake, no punch, no hitstop and no
+    // particles at all. Clearing a room should land like something happened.
+    this.juice.addFlash(0.34, COL.hull);
+    this.juice.addPunch(0.07);
+    this.juice.addShake(9);
+    this.juice.addSlowmo(0.22);
+    this.particles.ring(this.player.x, this.player.y, COL.hull, 190, 0.5, 4);
+    this.particles.ring(this.player.x, this.player.y, COL.playerCore, 96, 0.32, 2.6);
     this.audio.onWaveClear();
 
     // The campaign is over when the last authored wave clears. `endRun`

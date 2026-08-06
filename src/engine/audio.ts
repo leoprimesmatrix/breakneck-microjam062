@@ -778,7 +778,18 @@ export class Audio {
     this.hiss(t, 0.2, 0.3, 420, 'bandpass', 6200, { pan, wet: 0.12, q: 0.9 });
     // Committing to a line with something on it is a different act from
     // committing to an empty one, and the ear should know before the eye does.
-    if (targets > 0) this.tone(hz(36), 'sine', 0.06, 0.12, t, 1.6, { pan });
+    //
+    // This used to be a single note gated on `targets > 0`, so a one-target
+    // launch and a six-target launch sounded identical — the loudest thing the
+    // game could have told you about the shot you were taking, unsaid. The
+    // note now climbs and opens with the count.
+    if (targets > 0) {
+      const k = Math.min(targets, 6);
+      this.tone(hz(36 + (k - 1) * 3), 'sine', 0.055 + k * 0.012, 0.12 + k * 0.02, t, 1.6, {
+        pan,
+        cutoff: 700 + k * 320,
+      });
+    }
   }
 
   onKill(kind: EnemyKind, chainIndex: number, combo: number, pan = 0) {
@@ -848,7 +859,10 @@ export class Audio {
     const t = this.ctx!.currentTime;
     // A stacked chord, each voice a beat late — the payoff should bloom, and
     // it is the one moment in the game allowed to use the room properly.
-    const degs = [0, 7, 12, 19, 24];
+    // Extended past five. The chord stopped growing at a QUAD while the popup
+    // kept going all the way to IMPOSSIBLE, so the three biggest names in the
+    // game shared one sound with the smallest one that earned a chord.
+    const degs = [0, 7, 12, 19, 24, 28, 31, 36];
     // The chord blooms, which means it has no front — and an event with no
     // transient is one the ear files as music rather than as a thing that just
     // happened. The crack goes on the front; the bloom stays behind it.
@@ -929,7 +943,12 @@ export class Audio {
     if (!this.enabled) return;
     const t = this.ctx!.currentTime;
     // A door opening on the next room: three rising notes and a breath of air.
-    const base = 24 + (n % 4) * 2;
+    //
+    // The base was `24 + (n % 4) * 2`, a four-wave cycle — so wave 12 sounded
+    // exactly like wave 4 and the campaign never once told you it was getting
+    // deeper. It climbs across the run now, and still wraps eventually so an
+    // endless run at wave 300 does not arrive as a dog whistle.
+    const base = 24 + Math.min(n - 1, 23) * 0.7 + (n % 4) * 1.2;
     [0, 5, 7].forEach((d, i) =>
       this.tone(hz(base + d), 'sine', 0.1, 0.5, t + i * 0.09, 1, { wet: 0.3, cutoff: 2600 }),
     );
@@ -945,6 +964,51 @@ export class Audio {
         wet: 0.35, cutoff: 2200 + i * 700,
       }),
     );
+  }
+
+  /**
+   * The end of the campaign.
+   *
+   * Previously this *was* `onWaveClear` — the same four notes for clearing
+   * wave one and for finishing all twenty-four. A run that ends in the same
+   * sound as its first thirty seconds does not sound like it ended.
+   */
+  onVictory() {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    // A long major arrival, wide open, with the room let all the way in.
+    [0, 7, 12, 16, 19, 24].forEach((d, i) =>
+      this.tone(hz(d + 24), i < 2 ? 'sawtooth' : 'triangle', 0.13 - i * 0.008, 2.2, t + i * 0.12, 1, {
+        wet: 0.62, cutoff: 1400 + i * 900, sweep: 700,
+      }),
+    );
+    this.thump(t, 90, 34, 0.3, 0.9);
+    this.hiss(t, 0.1, 1.4, 2600, 'highpass', 0, { wet: 0.5 });
+  }
+
+  /**
+   * Something arrived. Quiet and low — a spawn is information, not an event,
+   * and it has to sit under a fight already in progress without adding to it.
+   * Before this the single most important thing that can happen while you are
+   * lining up a shot — a new body entering the room — made no sound at all.
+   */
+  onSpawn(pan = 0) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(hz(20), 'sine', 0.05, 0.22, t, 1, { pan, cutoff: 420 });
+    this.hiss(t, 0.035, 0.16, 1800, 'bandpass', 5200, { pan, wet: 0.18, q: 1.4 });
+  }
+
+  /**
+   * The line went past something and did not take it.
+   *
+   * A tick, not a hit: it must never be mistaken for a kill, and it must not
+   * pile up when a strike grazes four bodies at once — the caller rations it.
+   */
+  onGraze(pan = 0) {
+    if (!this.enabled) return;
+    const t = this.ctx!.currentTime;
+    this.tone(2600, 'sine', 0.03, 0.05, t, 1, { pan, cutoff: 5200 });
   }
 
   onLancerMark(pan = 0) {

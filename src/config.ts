@@ -86,6 +86,13 @@ export const BURN_LIFE = 30;
 export const BURN_CAP = 64;
 
 /**
+ * How close the line has to pass to something it did not kill for the game to
+ * admit it noticed. Purely cosmetic — a graze flashes the body and ticks, and
+ * changes no outcome whatsoever.
+ */
+export const GRAZE_BAND = 26;
+
+/**
  * Multi-kill names. Index = kills in a single strike, minus two.
  * Naming the payoff is most of what makes a player chase it again.
  */
