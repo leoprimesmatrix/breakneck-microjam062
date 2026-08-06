@@ -30,6 +30,15 @@ export class Input {
   private confirmEdge = false;
   private anyEdge = false;
   private pauseEdge = false;
+  /**
+   * True on the single frame a *pointer* press begins.
+   *
+   * Separate from `confirmEdge`, which a keypress also latches. Screen-space UI
+   * hit-tests against the cursor, and a player pressing Space on the title
+   * screen should not be treated as having clicked whatever the mouse happens
+   * to be resting on.
+   */
+  private pointerEdge = false;
 
   /** Keyboard aim, in radians, integrated from the direction keys. */
   keyAngle = -Math.PI / 2;
@@ -155,6 +164,7 @@ export class Input {
     this.keyAimActive = false;
     this.anyEdge = true;
     this.confirmEdge = true;
+    this.pointerEdge = true;
   };
 
   private onPointerMove = (e: PointerEvent) => {
@@ -224,6 +234,12 @@ export class Input {
   takeConfirm() {
     const v = this.confirmEdge;
     this.confirmEdge = false;
+    return v;
+  }
+
+  takePointerDown() {
+    const v = this.pointerEdge;
+    this.pointerEdge = false;
     return v;
   }
 

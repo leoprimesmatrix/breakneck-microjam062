@@ -64,6 +64,7 @@ kept here so the submitted artefact survives independently of the page.
 | Keyboard | **WASD** / arrows steer the reticle · **hold Space** or **Shift** · release |
 | Touch | touch anywhere to aim through that point · release to strike |
 | | `P` / `Esc` pause · `M` mute · `F` frame stats |
+| Settings | the gear in the bottom-right of the title and pause screens — music and SFX volume, saved locally |
 
 ## How the theme is used
 

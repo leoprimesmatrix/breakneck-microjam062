@@ -7,7 +7,7 @@ import { drawHud } from './hud';
 import { PostFX } from './postfx';
 import { quality } from './quality';
 import { drawScene } from './scene';
-import { drawScreens } from './screens';
+import { drawOverlay, drawScreens } from './screens';
 import { drawUI, mono, uiWidth } from './text';
 
 /**
@@ -56,6 +56,7 @@ export function render(ctx: CanvasRenderingContext2D, game: Game) {
   if (!off('hud') && (game.state === 'play' || game.state === 'paused')) drawHud(ctx, game);
   if (!off('screens')) drawScreens(ctx, game);
   uiGlow.flush(ctx, dw, dh, 0.78);
+  if (!off('screens')) drawOverlay(ctx, game);
 
   if (!off('finish')) fx.finish(ctx);
   if (!off('cursor')) drawCursor(ctx, game);

@@ -1,5 +1,6 @@
 import type { EnemyKind } from '../game/enemies';
 import { Music } from './music';
+import { gainFor, saveSettings, settings } from '../settings';
 
 /**
  * Every sound effect in this game is synthesised: no samples, no licensing, no
@@ -113,10 +114,23 @@ export class Audio {
   private trackFilter!: BiquadFilterNode;
   private noise!: AudioBuffer;
 
+  /**
+   * The player's two volume controls, as their own stage in the graph.
+   *
+   * They are separate nodes rather than a scale factor folded into the gains
+   * already here because almost every one of those gains is automated —
+   * bullet time, the pause duck, the crossfade, the swell on the first note.
+   * A control that multiplied into them would have to be re-applied by every
+   * one of those, and would be silently undone by whichever ramped last.
+   * One node per bus, downstream of all the automation, is the whole feature.
+   */
+  private sfxTrim!: GainNode;
+  private musicTrim!: GainNode;
+
   private droneGain: GainNode | null = null;
   private alarmGain: GainNode | null = null;
 
-  private muted = false;
+  private muted = settings.muted;
   private running = false;
   private paused = false;
   /** Whether the sequencer has already stood down for a recorded track. */
@@ -186,13 +200,25 @@ export class Audio {
       this.master.gain.value = this.muted ? 0 : 0.85;
       this.master.connect(this.limiter);
 
+      // The two player-facing trims, sitting between each bus and the master.
+      this.sfxTrim = ctx.createGain();
+      this.sfxTrim.gain.value = gainFor(settings.sfx);
+      this.sfxTrim.connect(this.master);
+
+      this.musicTrim = ctx.createGain();
+      this.musicTrim.gain.value = gainFor(settings.music);
+      this.musicTrim.connect(this.master);
+
       // A small, dark plate. Long enough to be a room, short enough that a
       // chain of kills does not turn into a wash.
       this.verb = ctx.createConvolver();
       this.verb.buffer = this.impulse(ctx, 1.05, 3.4);
       const verbReturn = ctx.createGain();
       verbReturn.gain.value = 0.85;
-      this.verb.connect(verbReturn).connect(this.master);
+      // Through the SFX trim, not straight to the master: the room is part of
+      // the effects, and a reverb that stayed up while its sources came down
+      // would turn a quiet mix into a wash of tails with nothing to belong to.
+      this.verb.connect(verbReturn).connect(this.sfxTrim);
 
       this.sfxComp = ctx.createDynamicsCompressor();
       // Threshold measured, not guessed: at -19 dB the glue was catching the
@@ -212,7 +238,7 @@ export class Audio {
 
       this.sfx = ctx.createGain();
       this.sfx.gain.value = 0.82;
-      this.sfx.connect(shaper).connect(this.sfxComp).connect(this.master);
+      this.sfx.connect(shaper).connect(this.sfxComp).connect(this.sfxTrim);
 
       // Post-compressor send: the room hears what the mix hears, so a squashed
       // chain does not throw a full-strength tail per kill.
@@ -227,7 +253,7 @@ export class Audio {
 
       this.music = ctx.createGain();
       this.music.gain.value = 0;
-      this.music.connect(this.musicFilter).connect(this.master);
+      this.music.connect(this.musicFilter).connect(this.musicTrim);
 
       // Recorded music, on its own filter — see the note at the top of the file.
       this.trackFilter = ctx.createBiquadFilter();
@@ -238,7 +264,7 @@ export class Audio {
       this.trackBus = ctx.createGain();
       // Silent until the first note, then swelled up by `riseMusic`.
       this.trackBus.gain.value = 0;
-      this.trackBus.connect(this.trackFilter).connect(this.master);
+      this.trackBus.connect(this.trackFilter).connect(this.musicTrim);
 
       if (this.tracks.attach(ctx, this.trackBus)) {
         this.tracks.onFirstNote(() => this.riseMusic());
@@ -260,12 +286,46 @@ export class Audio {
 
   setMuted(v: boolean) {
     this.muted = v;
+    settings.muted = v;
+    saveSettings();
     if (this.ctx) this.master.gain.setTargetAtTime(v ? 0 : 0.85, this.ctx.currentTime, 0.03);
     return this.muted;
   }
 
   toggleMute() {
     return this.setMuted(!this.muted);
+  }
+
+  // ----------------------------------------------------------------- volumes
+  get musicVolume() {
+    return settings.music;
+  }
+
+  get sfxVolume() {
+    return settings.sfx;
+  }
+
+  /**
+   * Both volume setters ramp rather than jump. A gain stepped instantly is a
+   * discontinuity in the waveform, which is audible as a click — and a slider
+   * being dragged sets it every frame, so an instant set would fizz the whole
+   * way across the track. 25ms is under the ear's resolution and long enough
+   * to be a slope instead of an edge.
+   */
+  setMusicVolume(v: number) {
+    settings.music = v < 0 ? 0 : v > 1 ? 1 : v;
+    saveSettings();
+    if (this.ctx) {
+      this.musicTrim.gain.setTargetAtTime(gainFor(settings.music), this.ctx.currentTime, 0.025);
+    }
+  }
+
+  setSfxVolume(v: number) {
+    settings.sfx = v < 0 ? 0 : v > 1 ? 1 : v;
+    saveSettings();
+    if (this.ctx) {
+      this.sfxTrim.gain.setTargetAtTime(gainFor(settings.sfx), this.ctx.currentTime, 0.025);
+    }
   }
 
   /**

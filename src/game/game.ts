@@ -27,6 +27,7 @@ import type { Input } from '../engine/input';
 import { Juice } from '../engine/juice';
 import { TAU, clamp, damp, dampAngle, makeRng, randRange, type Rng } from '../engine/math';
 import { Particles } from '../engine/particles';
+import type { UiHit } from '../settings';
 import { view } from '../viewport';
 import { ORB_R, SPECS, Swarm, silhouette, type Enemy, type EnemyKind } from './enemies';
 import { Player } from './player';
@@ -120,6 +121,16 @@ export class Game {
   deadTime = 0;
   /** Seconds since the title screen appeared, for staging its entrance. */
   titleTime = 0;
+
+  /** True while the settings panel is up, over the title or over the pause. */
+  settingsOpen = false;
+  /**
+   * Clickable rectangles, cleared and re-pushed by the renderer every frame.
+   * See `render/settings.ts` for why the UI is immediate-mode.
+   */
+  readonly uiHits: UiHit[] = [];
+  /** Id of the slider currently being dragged, or null. */
+  uiDrag: string | null = null;
 
   /** False until the cold open has fired; the game sits in standby until then. */
   armed = false;
@@ -444,10 +455,80 @@ export class Game {
     if (this.juice.consumeHitstop(dtReal)) return;
     this.juice.update(dtReal);
 
+    // Screen-space UI reads input before the game does, and eats whatever it
+    // uses. That is what stops a click on the gear from also starting the run,
+    // and Escape from resuming a paused game instead of closing the panel.
+    this.stepUi();
+
     if (this.state === 'title') this.stepTitle(dtReal);
     else if (this.state === 'play') this.stepPlay(dtReal);
     else if (this.state === 'paused') this.stepPaused(dtReal);
     else this.stepDead(dtReal);
+  }
+
+  // ---------------------------------------------------------------------- ui
+  /**
+   * Hit-test the cursor against the rectangles the renderer pushed last frame,
+   * and consume whatever the panel uses.
+   *
+   * Only pointer presses count. `takeConfirm` is also latched by Space and
+   * Enter, and a player pressing Space on the title screen must not be treated
+   * as having clicked whatever the mouse was left resting on.
+   */
+  private stepUi() {
+    const input = this.input;
+    const px = input.cursorScreenX();
+    const py = input.cursorScreenY();
+
+    // A drag owns the pointer until it is released, wherever it wanders. Sliders
+    // that stop tracking the moment the cursor leaves the track are the single
+    // most common way a hand-rolled one feels broken.
+    if (this.uiDrag) {
+      const track = this.uiHits.find((h) => h.id === this.uiDrag);
+      if (track) this.applySlider(this.uiDrag, (px - track.x) / track.w);
+      if (!input.holding) this.uiDrag = null;
+      input.takeConfirm();
+      input.takePointerDown();
+      input.takeRelease();
+      return;
+    }
+
+    const pressed = input.takePointerDown();
+    const hit = pressed
+      ? this.uiHits.find((h) => px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h)
+      : undefined;
+
+    if (hit) {
+      if (hit.id === 'gear') this.settingsOpen = !this.settingsOpen;
+      else if (hit.id === 'close') this.settingsOpen = false;
+      else if (hit.id === 'mute') this.audio.toggleMute();
+      else if (hit.id === 'music' || hit.id === 'sfx') {
+        this.uiDrag = hit.id;
+        this.applySlider(hit.id, (px - hit.x) / hit.w);
+      }
+      this.audio.onUiMove();
+      input.takeConfirm();
+      input.takeRelease();
+      return;
+    }
+
+    if (!this.settingsOpen) return;
+
+    // The panel is up, so it owns every gesture until it is closed — including
+    // the click that lands outside it, which would otherwise start the run
+    // happening behind it.
+    if (input.takePause()) {
+      this.settingsOpen = false;
+      this.audio.onUiMove();
+    }
+    input.takeConfirm();
+    input.takeRelease();
+  }
+
+  private applySlider(id: string, v: number) {
+    const c = v < 0 ? 0 : v > 1 ? 1 : v;
+    if (id === 'music') this.audio.setMusicVolume(c);
+    else this.audio.setSfxVolume(c);
   }
 
   /**

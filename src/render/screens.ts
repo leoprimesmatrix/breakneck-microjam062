@@ -5,6 +5,7 @@ import { SPECS } from '../game/enemies';
 import { view } from '../viewport';
 import { drawRadial, flareSprite } from './glow';
 import { drawEnemyIcon, group } from './hud';
+import { drawGear, drawSettings } from './settings';
 import { drawShip } from './ship';
 import { IS_TOUCH, drawUI, drawVec, fitVec, uiWidth, vecWidth } from './text';
 
@@ -216,9 +217,37 @@ function drawStandby(ctx: CanvasRenderingContext2D, game: Game) {
 }
 
 export function drawScreens(ctx: CanvasRenderingContext2D, game: Game) {
+  // Immediate mode: the hit list is rebuilt from scratch every frame by
+  // whichever screen is up, so a control that stops being drawn stops being
+  // clickable in the same breath. See `render/settings.ts`.
+  game.uiHits.length = 0;
+
   if (game.state === 'title') (game.armed ? drawTitle : drawStandby)(ctx, game);
   else if (game.state === 'paused') drawPause(ctx, game);
   else if (game.state === 'dead') drawResults(ctx, game);
+}
+
+/**
+ * The settings layer, drawn *after* the UI glow has been flushed.
+ *
+ * Everything else on these screens is accumulated into a glow buffer and added
+ * over the canvas at the end of the pass, which means anything drawn during
+ * that pass has the wordmark's bloom laid on top of it afterwards — an opaque
+ * panel included. Drawing the panel after the flush is what makes it a panel in
+ * front of the title rather than a pane of smoked glass inside it.
+ *
+ * It also suits the content: a volume slider is instrumentation, and the one
+ * thing on screen that should read as crisp rather than lit.
+ */
+export function drawOverlay(ctx: CanvasRenderingContext2D, game: Game) {
+  // The gear rides on the two screens the player is allowed to linger on. Not
+  // the results screen, where the only thing worth offering is another run.
+  if (game.state === 'title' ? game.armed : game.state === 'paused') {
+    drawGear(ctx, game);
+    if (game.settingsOpen) drawSettings(ctx, game);
+  } else {
+    game.settingsOpen = false;
+  }
 }
 
 function scrim(ctx: CanvasRenderingContext2D, a: number) {
