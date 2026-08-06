@@ -109,10 +109,25 @@ compiled output. `bake.mjs` walks that same graph to CommonJS, wraps every
 module in a registry with a ten-line `require` shim, runs it through terser
 (also fetched, not installed), and inlines the result into `index.html` where
 the module tag was. One call from the console, one self-contained file out,
-byte-for-byte the shape `vite build` produces.
+byte-for-byte the shape `vite build` produces — plus `public/` copied beside
+it, because a build missing its soundtrack still boots and runs and is the
+hardest kind of bug to see.
+
+`typecheck.mjs` is the other half of `npm run build`. Everything above runs on
+`ts.transpileModule`, which is a syntax-directed strip — it erases types
+without ever reading them, so a wrong argument count or a misspelled property
+compiles clean and ships. So the same fetched compiler is driven properly, with
+a host that reads through the dev server, and `bake` refuses to write anything
+that fails. `await CHECK()` runs it alone.
 
 It is slower and less clever than a real bundler and it does not want to be
 one. It exists so that the answer to "can this machine ship the game" is yes.
+
+Audio plays for a real browser and is muted for an automation pane, decided by
+User-Agent in `silence.js` rather than by a query string somebody has to
+remember — a mute that a human has to know a secret to escape is
+indistinguishable from a broken game, which is exactly what it was mistaken
+for. `?sound` and `?mute` force it either way.
 
 `promo/AFTERBURN-web.zip` is the jam build as it was actually uploaded to
 itch.io, kept here so the submitted artefact survives independently of the page.

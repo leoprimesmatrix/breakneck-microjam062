@@ -51,6 +51,45 @@
         /** Fire the cold open the way the first real gesture does. */
         w.ARM = () => w.__game.arm();
 
+        /**
+         * Frame cost, and a warning about the half of it that cannot be trusted.
+         *
+         * `p50` here is real: it is CPU work in `drawScene` and friends, and it
+         * reproduces across runs to a tenth of a millisecond. The tail is not.
+         * Canvas2d commands are handed to the compositor rather than executed
+         * inline, this page is usually driven from a pane that is hidden and
+         * therefore throttled, and a loop that never yields lets the queue build
+         * until the GPU process pushes back — which lands as a ~40 ms stall on
+         * whichever unlucky frame is holding the bag.
+         *
+         * Measured that way the game looked like it dropped 4% of its frames.
+         * Measured any other way it does not drop any: the giveaway was that
+         * p99 sat at ~42 ms no matter what was drawn, including with the whole
+         * scene skipped, and jumped between 12 and 26 dropped frames across runs
+         * of *identical* work. A cost that does not move when the work moves is
+         * not the work. So this reports the median and the stage split, and
+         * refuses to report a p99 that would only ever be believed once.
+         */
+        w.PERF = (frames = 400) => {
+          const t = (fn) => { const a = performance.now(); fn(); return performance.now() - a; };
+          for (let i = 0; i < 120; i++) { w.__advance(1 / 120); w.__render(); }  // warm
+          const sim = [], draw = [];
+          for (let i = 0; i < frames; i++) {
+            sim.push(t(() => w.__advance(1 / 120)));
+            draw.push(t(() => w.__render()));
+          }
+          const med = (a) => { const s = [...a].sort((x, y) => x - y); return +s[s.length >> 1].toFixed(2); };
+          const out = { alive: w.__game.swarm.list.filter((e) => e.alive).length,
+                        simMs: med(sim), renderMs: med(draw), stages: {} };
+          for (const name of ['scene', 'post', 'composite', 'hud', 'screens', 'finish', 'cursor']) {
+            w.__skip.clear(); w.__skip.add(name);
+            const s = []; for (let i = 0; i < 120; i++) s.push(t(() => w.__render()));
+            out.stages[name] = +(out.renderMs - med(s)).toFixed(2);   // cost attributed by removal
+          }
+          w.__skip.clear();
+          return out;
+        };
+
         /** Bake dist/index.html. See tools/harness/bake.mjs. */
         w.BAKE = (opts) => import('/harness/bake.mjs').then((m) => m.bake(opts));
 
