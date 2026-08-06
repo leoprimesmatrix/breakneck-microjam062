@@ -179,12 +179,26 @@ export async function bake({ dev = false, name = 'index.html', minify = !dev } =
   });
   if (!r.ok) throw new Error(`save failed: ${r.status}`);
 
+  // A build is index.html *and* the ten mp3s beside it. Leaving them out made a
+  // dist/ that boots and runs and is completely silent, which is the worst
+  // possible shape for a bug to have: nothing throws and nothing logs. The
+  // server does the copy — nineteen megabytes of audio does not want to make
+  // the trip through base64 and a POST body to end up on the same disk.
+  const a = await fetch('/assets', { method: 'POST' });
+  if (!a.ok) throw new Error(`assets failed: ${a.status}`);
+  const { copied } = await a.json();
+  if (!copied) throw new Error('assets: nothing copied — dist/ would ship silent');
+
   const kb = Math.round(html.length / 1024);
-  console.log(`[bake] ${mods.size} modules -> dist/${name} (${kb} kB, dev=${dev}) in ${Math.round(performance.now() - t0)}ms`);
+  console.log(
+    `[bake] ${mods.size} modules -> dist/${name} (${kb} kB, dev=${dev}) ` +
+      `+ ${copied} asset(s) in ${Math.round(performance.now() - t0)}ms`,
+  );
   return {
     modules: mods.size,
     bytes: html.length,
     kb,
+    assets: copied,
     minified: minify,
     shrank: minify ? `${Math.round(raw / 1024)} kB -> ${Math.round(bundle.length / 1024)} kB` : null,
     name,

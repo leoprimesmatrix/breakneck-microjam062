@@ -15,6 +15,12 @@
       }
       #boot.err { color: #ff6b6b; letter-spacing: 0; text-transform: none; font-family: ui-monospace, Consolas, monospace; text-align: left; }
     </style>
+    <!--
+      Before the modules, because the soundtrack's decks are built during module
+      init and a patch installed afterwards would miss them. Self-disabling: a
+      real browser falls straight through it and the game sounds as shipped.
+    -->
+    <script src="/harness/silence.js"></script>
   </head>
   <body>
     <canvas id="game"></canvas>
@@ -106,30 +112,12 @@
           return out;
         };
 
-        // Silent unless asked. This page gets driven by automation as often as
-        // by a person, and a game that starts singing because a tool opened it
-        // is a game nobody can work next to. `?sound` is the way in.
-        //
-        // Held at the master gain rather than through `audio.toggleMute()` on
-        // purpose: mute is a saved player setting, and a dev page must not
-        // write to the player's profile just by being opened.
-        if (!new URLSearchParams(location.search).has('sound')) {
-          const hold = () => {
-            const a = w.__game && w.__game.audio;
-            if (a && a.ctx) a.master.gain.value = 0;
-            const t = a && a.tracks && a.tracks.decks;
-            if (t) for (const d of t) { d.el.muted = true; d.el.volume = 0; }
-          };
-          setInterval(hold, 200);
-          hold();
-          const tag = document.createElement('div');
-          tag.textContent = 'MUTED — open /?sound to hear it';
-          tag.style.cssText =
-            'position:fixed;left:12px;bottom:10px;z-index:9;pointer-events:none;' +
-            'font:700 10px/1 Inter,system-ui,sans-serif;letter-spacing:.18em;' +
-            'color:#7e92be;opacity:.55';
-          document.body.appendChild(tag);
-        }
+        // Muting is handled by `silence.js`, loaded in the head above — early
+        // enough to patch the audio APIs themselves, which is the only place a
+        // mute can stand that catches the two soundtrack decks. What used to be
+        // here was a 200 ms interval re-zeroing the master gain forever, which
+        // fought the game's own automation for the same parameter and ran for
+        // the life of the page to enforce a decision made once at load.
 
         boot.remove();
       } catch (e) {

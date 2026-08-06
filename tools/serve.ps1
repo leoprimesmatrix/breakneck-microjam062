@@ -61,7 +61,7 @@ $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
 Write-Host "AFTERBURN on http://localhost:$Port/"
 Write-Host "  console:  await BAKE()   ->  dist/index.html"
-Write-Host "  audio is muted by default; append ?sound to any URL to hear it"
+Write-Host "  audio plays for a real browser; automation panes are muted (?sound / ?mute override)"
 
 try {
   while ($listener.IsListening) {
@@ -94,6 +94,37 @@ try {
         continue
       }
 
+      # The other half of a build. `bake` produces index.html and nothing else,
+      # which for a game whose soundtrack is its one loaded asset means a dist/
+      # that boots, runs, and is silent — and the reason that went unnoticed for
+      # so long is that this server used to fall back to public/ when a file
+      # under dist/ was missing, so a half-built dist/ auditioned perfectly.
+      # Copied here rather than POSTed from the page because ~19 MB of mp3
+      # through base64 is thirty seconds of nothing for a file copy.
+      if ($req.HttpMethod -eq 'POST' -and $path -eq '/assets') {
+        $srcDir = Join-Path $Repo 'public'
+        $dstDir = Join-Path $Repo 'dist'
+        $copied = 0
+        if (Test-Path $srcDir -PathType Container) {
+          if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Force -Path $dstDir | Out-Null }
+          foreach ($f in Get-ChildItem -LiteralPath $srcDir -Recurse -File) {
+            $rel = $f.FullName.Substring($srcDir.Length).TrimStart('\', '/')
+            $target = Join-Path $dstDir $rel
+            $parent = Split-Path $target -Parent
+            if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+            Copy-Item -LiteralPath $f.FullName -Destination $target -Force
+            $copied++
+          }
+        }
+        Write-Host ("assets: {0} file(s) public/ -> dist/" -f $copied)
+        $res.StatusCode = 200
+        $res.ContentType = 'application/json'
+        $out = [Text.Encoding]::UTF8.GetBytes("{""copied"":$copied}")
+        $res.OutputStream.Write($out, 0, $out.Length)
+        $res.Close()
+        continue
+      }
+
       $full = $null
       # Only the bare root is the dev page. `/index.html` has to reach the
       # repository's real shell, because that is what the bundler wraps.
@@ -108,15 +139,13 @@ try {
           $alt = Resolve-Path-Safe $Repo (Join-Path 'public' $rel)
           if ($alt -and (Test-Path $alt -PathType Leaf)) { $full = $alt }
         }
-        # A build asks for `music/x.mp3` relative to itself, which is right on
-        # itch.io where index.html sits beside music/ — and wrong here, where it
-        # is served out of /dist/ and resolves to /dist/music/x.mp3. Without
-        # this every audition of a build 404s its whole soundtrack and looks
-        # like a bug in the bundler.
-        if ($full -and -not (Test-Path $full -PathType Leaf) -and $rel -like 'dist/*') {
-          $alt = Resolve-Path-Safe $Repo (Join-Path 'public' $rel.Substring(5))
-          if ($alt -and (Test-Path $alt -PathType Leaf)) { $full = $alt }
-        }
+        # Deliberately no public/ fallback for dist/. A build asks for
+        # `music/x.mp3` relative to itself, and there used to be a fallback here
+        # so that resolved to public/ — which meant a dist/ containing nothing
+        # but index.html auditioned with a full soundtrack and shipped without
+        # one. `POST /assets` puts the files where the build actually looks; a
+        # 404 under dist/ now means the build is incomplete, and saying so is
+        # the entire point.
       }
 
       if (-not $full) {
@@ -129,51 +158,28 @@ try {
         $ext = [IO.Path]::GetExtension($full).ToLowerInvariant()
 
         # A baked build is the real game and starts its soundtrack the moment
-        # you touch it. That is correct on itch.io and wrong on a dev machine
-        # where builds get opened by tooling as often as by a person, so the
-        # *response* gets a silencer while the bytes on disk stay exactly
-        # shippable. `?sound` opts in, same as the dev page.
+        # you touch it. That is correct on itch.io, and here builds get opened by
+        # tooling as often as by a person — so the *response* carries a silencer
+        # while the bytes on disk stay exactly shippable.
+        #
+        # It is injected unconditionally and decides for itself. `silence.js`
+        # mutes only a browser that identifies itself as an automation pane, so
+        # inlining it always is what makes the rule "the tool is quiet, the
+        # person is not" true in one place instead of two that can disagree.
         if ($ext -eq '.html' -and $full.StartsWith((Join-Path $Repo 'dist'), [StringComparison]::OrdinalIgnoreCase)) {
-          if ($req.Url.Query -notmatch 'sound') {
-            $hush = @'
-<script>
-(() => {
-  // Belt: every AudioContext this page builds gets its destination cut.
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (AC) {
-    const patch = function (...a) {
-      const ctx = new AC(...a);
-      try { ctx.suspend(); } catch (e) {}
-      const gain = ctx.createGain();
-      gain.gain.value = 0;
-      gain.connect(ctx.destination);
-      Object.defineProperty(ctx, 'destination', { get: () => gain });
-      return ctx;
-    };
-    patch.prototype = AC.prototype;
-    window.AudioContext = window.webkitAudioContext = patch;
-  }
-  // Braces: the soundtrack decks are bare `new Audio()`, never in the DOM.
-  const A = window.Audio;
-  window.Audio = function (...a) {
-    const el = new A(...a);
-    el.muted = true;
-    const play = el.play.bind(el);
-    el.play = () => { el.muted = true; el.volume = 0; return play(); };
-    return el;
-  };
-  const tag = document.createElement('div');
-  tag.textContent = 'MUTED - add ?sound to hear it';
-  tag.style.cssText = 'position:fixed;left:12px;bottom:10px;z-index:9;pointer-events:none;' +
-    'font:700 10px/1 Inter,system-ui,sans-serif;letter-spacing:.18em;color:#7e92be;opacity:.55';
-  addEventListener('DOMContentLoaded', () => document.body.appendChild(tag));
-})();
-</script>
-'@
+          $hushFile = Join-Path $Harness 'silence.js'
+          if (Test-Path $hushFile -PathType Leaf) {
+            $hush = "<script>" + [IO.File]::ReadAllText($hushFile) + "</script>"
             $text = [Text.Encoding]::UTF8.GetString($bytes)
+            # Spliced literally rather than with `-replace`, which reads `$&` and
+            # `$1` in its *replacement* as backreferences — so the first template
+            # literal anyone puts in silence.js would be silently eaten.
             # Before everything, so it is installed prior to any game code.
-            $text = $text -replace '(?i)<head>', ("<head>" + $hush)
-            $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+            $i = $text.IndexOf('<head>', [StringComparison]::OrdinalIgnoreCase)
+            if ($i -ge 0) {
+              $text = $text.Substring(0, $i + 6) + $hush + $text.Substring($i + 6)
+              $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+            }
           }
         }
         $res.ContentType = if ($MIME.ContainsKey($ext)) { $MIME[$ext] } else { 'application/octet-stream' }
