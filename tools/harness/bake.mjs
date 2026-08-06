@@ -132,11 +132,27 @@ function assemble(mods, entry) {
  * Terser comes from esm.sh at bake time, the same trick as the compiler — the
  * whole toolchain is fetched rather than installed, which is the only kind
  * this machine can have.
+ *
+ * `check` is on by default, and is the missing half of `npm run build` —
+ * `tsc --noEmit && vite build`. Everything else here runs on
+ * `ts.transpileModule`, which erases types without ever reading them, so until
+ * this existed a wrong argument count or a misspelled property compiled clean
+ * and shipped. Measured at 2.7 s cold and 0.9 s warm, which is not a price
+ * worth an escape hatch most days — `{check:false}` is there for the day it is.
  */
-export async function bake({ dev = false, name = 'index.html', minify = !dev } = {}) {
+export async function bake({ dev = false, name = 'index.html', minify = !dev, check = true } = {}) {
   const t0 = performance.now();
   ts = await import(TS_URL);
   if (ts.default && !ts.preProcessFile) ts = ts.default;
+
+  if (check) {
+    const { check: typecheck } = await import('/harness/typecheck.mjs');
+    const diags = await typecheck({ quiet: true });
+    if (diags.length) {
+      for (const d of diags) console.error(`  ${d.file}:${d.line}:${d.col}  TS${d.code}  ${d.message}`);
+      throw new Error(`type check failed: ${diags.length} diagnostic(s) — nothing was written`);
+    }
+  }
 
   const entry = '/src/main.ts';
   const mods = await collect(entry, dev);

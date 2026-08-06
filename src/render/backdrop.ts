@@ -148,7 +148,10 @@ function bleed(depth: number) {
 }
 
 // THE RANGE — a calibration hall. Steel ribs receding to a lit service horizon.
-function farHall(ctx: CanvasRenderingContext2D, game: Game) {
+// Underscored, not removed: every `far*` is called through one dispatch with
+// the same shape, and a hall that happens not to need the game state should not
+// be the reason that shape has two versions.
+function farHall(ctx: CanvasRenderingContext2D, _game: Game) {
   const b = bleed(FAR);
   const horizon = b.y + b.h * 0.36;
 
@@ -260,7 +263,7 @@ function midOutage(ctx: CanvasRenderingContext2D, game: Game) {
 }
 
 // THE FOUNDRY — a working pit. The heat is below you, the machines are behind.
-function farFurnace(ctx: CanvasRenderingContext2D, game: Game) {
+function farFurnace(ctx: CanvasRenderingContext2D, _game: Game) {
   const b = bleed(FAR);
   const horizon = b.y + b.h * 0.44;
 

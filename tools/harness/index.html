@@ -55,6 +55,12 @@
         w.BAKE = (opts) => import('/harness/bake.mjs').then((m) => m.bake(opts));
 
         /**
+         * Type-check src/, the half of `npm run build` this machine cannot run.
+         * See tools/harness/typecheck.mjs.
+         */
+        w.CHECK = (opts) => import('/harness/typecheck.mjs').then((m) => m.check(opts));
+
+        /**
          * A deterministic still of the room, for before/after comparison.
          *
          * Three things in a live frame are random or wall-clock driven, and all

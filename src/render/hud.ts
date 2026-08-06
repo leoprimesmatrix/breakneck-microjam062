@@ -14,7 +14,6 @@ import {
   SECTOR_ORDER,
   SECTOR_WAVES,
   SECTORS,
-  theme,
   wardenPlates,
 } from '../sectors';
 import { view } from '../viewport';
