@@ -239,9 +239,14 @@ was made, so the repository is the archive rather than a pointer to one.
 |---|---|
 | `thumbnail.png` | 1260×1000 key art — the cover the GIF resolves into |
 | `cover.gif` | 630×500 itch cover: gameplay, then it lands on the key art and holds |
-| `title-anim.mp4` | 1920×1080/60 title sequence — the wordmark shattered and reassembled |
-| `title-anim.gif` | the same piece at 560×315, under itch's 3 MB image limit |
-| `title-still.png` | its final frame, for anywhere a flat lockup is wanted |
+| `title-anim-v2.{mp4,gif}` | the title sequence: the mark assembling out of its own wreckage, over a ringed world |
+| `title-coming-soon.{mp4,gif}` | the same, closing on **COMING SOON.** |
+| `title-august-2026.{mp4,gif}` | the same, closing on **AUGUST 2026** |
+| `title-ship-coming-soon.{mp4,gif}` | the interceptor sweeps the deck, strikes away, and the flash leaves COMING SOON. |
+| `title-ship-august-2026.{mp4,gif}` | it dives out of the planet's limb instead, and leaves AUGUST 2026 |
+| `title-ship-strike.{mp4,gif}` | it crosses at full speed and hooks back against its own momentum |
+| `title-anim.{mp4,gif}` | the v1 sequence, kept: it shows the mark whole before breaking it, which is the thing v2 exists to stop doing |
+| `title-still.png` | a flat lockup, for anywhere an animation cannot go |
 | `shot-*.png` | the three page screenshots at 1600×900 |
 | `full/shot-*.png` | the same three at full canvas resolution, before downscaling |
 | `ITCH_PAGE.md` | every field of the itch.io submission form, ready to paste |

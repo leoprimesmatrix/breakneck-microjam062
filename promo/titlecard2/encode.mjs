@@ -153,11 +153,20 @@ export async function encodeVariant(seq, baseName, opts = {}) {
   // moving camera leaves stale-pixel smears across the background. `refresh`
   // writes a full frame every so often, so what staleness does slip through
   // never survives longer than most of a second.
+  // The ladder has to reach far enough for the *longest* variant, not the one
+  // it was tuned on. It used to stop at the fourth rung, which lands a 543
+  // frame sequence at 2.8 MB and a 753 frame one at 3.3 MB — over the cap, and
+  // shipped anyway, because falling off the end of the ladder was silent.
+  // `refresh` counts frames *between* full ones, so raising it is the cheapest
+  // remaining win once the palette is already small.
   const attempts = opts.attempts ?? [
     { skip: 1, colors: 255, delay: 5, tol: 6, refresh: 16 },
     { skip: 1, colors: 199, delay: 5, tol: 6, refresh: 16 },
     { skip: 1, colors: 199, delay: 5, tol: 8, refresh: 12 },
     { skip: 2, colors: 199, delay: 10, tol: 6, refresh: 8 },
+    { skip: 2, colors: 160, delay: 10, tol: 8, refresh: 16 },
+    { skip: 2, colors: 128, delay: 10, tol: 10, refresh: 24 },
+    { skip: 3, colors: 128, delay: 15, tol: 12, refresh: 30 },
   ];
   const TIDX = 255;
   let bytes = null;
@@ -209,7 +218,17 @@ export async function encodeVariant(seq, baseName, opts = {}) {
     P.gifBytes = bytes.byteLength;
     if (bytes.byteLength <= CAP) break;
   }
+  // Running out of ladder is a real outcome and used to be an invisible one:
+  // the file still posted, still looked fine locally, and only failed at the
+  // upload. Say so, and hand the caller a flag it can check.
+  const overCap = bytes.byteLength > CAP;
+  if (overCap) {
+    console.warn(
+      `[encode] ${baseName}.gif is ${(bytes.byteLength / 1e6).toFixed(2)} MB, over the ` +
+        `${(CAP / 1e6).toFixed(2)} MB cap — the ladder ran out. Pass a lower \`attempts\`.`,
+    );
+  }
   await post(`${baseName}.gif`, bytes);
   P.phase = 'done';
-  return { mp4: P.mp4Bytes, gif: P.gifBytes, gifAttempt: used };
+  return { mp4: P.mp4Bytes, gif: P.gifBytes, gifAttempt: used, overCap };
 }

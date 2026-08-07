@@ -10,13 +10,14 @@ are kept untouched.
 
 ## Outputs
 
-| file | variant |
-|---|---|
-| `promo/title-anim-v2.{mp4,gif}` | the sequence |
-| `promo/title-coming-soon.{mp4,gif}` | "COMING SOON." at the bottom of frame, after a breath |
-| `promo/title-august-2026.{mp4,gif}` | "AUGUST 2026", same placement |
-| `promo/title-ship-coming-soon.{mp4,gif}` | the interceptor coils on the words' spot, strikes away through the top of frame, and "COMING SOON." is what the flash leaves behind |
-| `promo/title-ship-august-2026.{mp4,gif}` | the same beat, closing on "AUGUST 2026" |
+| file | variant | sky | arrival |
+|---|---|---|---|
+| `promo/title-anim-v2.{mp4,gif}` | the sequence | companion | — |
+| `promo/title-coming-soon.{mp4,gif}` | "COMING SOON." at the bottom of frame, after a breath | companion | — |
+| `promo/title-august-2026.{mp4,gif}` | "AUGUST 2026", same placement | companion | — |
+| `promo/title-ship-coming-soon.{mp4,gif}` | the interceptor coils on the words' spot, strikes away through the top of frame, and "COMING SOON." is what the flash leaves behind | eclipse | sweep |
+| `promo/title-ship-august-2026.{mp4,gif}` | the same beat, closing on "AUGUST 2026" | companion | dive |
+| `promo/title-ship-strike.{mp4,gif}` | the third arrival — a full-speed crossing that hooks back against its own momentum — closing on "COMING SOON." | rise | strafe |
 | `promo/teaser-coming-soon.mp4` | the ~24s teaser: galaxy vista with the game's pitch as cards, the ship's hero run and charge, and its strike white-out smash-cutting into the whole title beat |
 | `promo/teaser-august-2026.mp4` | the same teaser, closing on "AUGUST 2026" |
 | `promo/trailer.mp4` | the ~83s trailer: a gas giant with a star cresting its limb, a graveyard of hulls with something waking in it, one live ship and the line it cashes, three half-lit hunters, a six-kill rush, and the title beat |
@@ -125,10 +126,18 @@ await RUNT('date');    // or 'soon' — the teaser, mp4 only
 await RUNFULL();       // the story trailer, mp4 only, 9 Mbps
 ```
 
-The ship variants run a bit long for the default GIF ladder; render them with
-`RUNV('shipdate', { gifStride: 2, attempts: [{ skip: 2, colors: 255, delay: 7,
-tol: 6, refresh: 12 }, /* …step down from there */ ] })` to land at 15 fps
-under the cap.
+The GIF ladder reaches far enough for the longest variant on its own now. It
+used to stop four rungs in, which lands the 543-frame `plain` at 2.8 MB and the
+753-frame ship variants at 3.3-4.2 MB — over itch's cap, and shipped anyway,
+because running off the end of the ladder was silent. It now steps down to
+`{skip:3, colors:128, delay:15, refresh:30}` and returns `overCap` (plus a
+console warning) if even that is not enough.
+
+Where each variant landed: plain 2.71 MB, soon 2.75, date 2.75, ship-coming-soon
+2.45, ship-august-2026 2.11, ship-strike 2.71. The 753-frame variants pay for it
+in frame rate — `shipdate` needed the last rung — which is the honest trade at
+a 3 MB cap for a 12.5-second piece. The mp4 is the asset; the GIF is for itch's
+cover slot.
 
 Progress is in `window.__prog`. Every render is deterministic — same seeds,
 same frames, same bytes, no wall clock anywhere.
