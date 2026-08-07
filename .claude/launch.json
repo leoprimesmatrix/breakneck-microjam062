@@ -14,6 +14,18 @@
       "port": 8790
     },
     {
+      "name": "titlecard2",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "promo/titlecard2/serve.ps1"
+      ],
+      "port": 8788
+    },
+    {
       "name": "afterburn-vite",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],

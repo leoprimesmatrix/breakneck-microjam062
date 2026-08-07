@@ -55,6 +55,7 @@
 import {
   COL, rgba, TAU, clamp01, glyphFor, drawShip, drawRadial, flareSprite,
 } from './lib.mjs';
+import { drawVista } from './vista.mjs';
 
 // ------------------------------------------------------------------ variant
 const VQ = new URL(import.meta.url).searchParams.get('v') || 'plain';
@@ -270,6 +271,25 @@ const rr2 = (a, b) => a + R2() * (b - a);
 
 /** Deck line. Everything above is sky; below is the dark floor that reflects. */
 const HORIZON = H * 0.802;
+
+/**
+ * Which sky this variant stands in. Five files that all open on the same
+ * backdrop look like five renders of one asset; giving the ship variants their
+ * own worlds makes the set read as a campaign. `vista.mjs` documents each.
+ */
+const STAGE =
+  VARIANT === 'shipsoon' ? 'eclipse' :
+  VARIANT === 'shipdate' ? 'rise' :
+  'companion';
+
+/**
+ * How much of the old flat nebula survives on top of the new sky, and how much
+ * of the old star spray. Both used to carry the whole background; now they are
+ * accents over something with real depth, and left at full strength they turn
+ * a shaded world and a volumetric nebula back into grey soup.
+ */
+const NEB_MIX = 0.34;
+const STAR_MIX = 0.4;
 
 /**
  * The nebula, two parallax layers of it, baked once. Elongated soft blobs in
@@ -1187,6 +1207,12 @@ function drawBackground(g, t, cam) {
   let flare = 0;
   for (const b of bl) flare += Math.exp(-b.q * 5) * b.amp;
 
+  // The room itself, behind everything: a shaded world, its rings, a volumetric
+  // nebula and a starfield with real colour temperature. All of it already
+  // existed in space.mjs and only the trailer had ever called it, so the asset
+  // most people will actually see was the one staged worst.
+  drawVista(g, t, cam, { stage: STAGE, flare });
+
   // Nebula: two parallax layers, warming as the mark assembles, flinching
   // with each impact — and *moving* now: the far layer slowly rotates and
   // breathes, the near one streams past and counter-turns. Drawn dark; the
@@ -1203,7 +1229,10 @@ function drawBackground(g, t, cam) {
   g.translate(W * 0.5 + cam.x * 0.4 + Math.sin(t * 0.021) * 14, fh * 0.5 - 30 + cam.y * 0.4);
   g.rotate(0.006 * t - 0.012);
   const brf = 1 + 0.014 * Math.sin(t * 0.23);
-  g.globalAlpha = Math.min(1, warm * 0.62);
+  // Pulled well back now. These two flat tiles used to *be* the sky; with a
+  // real one behind them their job is only to keep the palette war moving
+  // across the frame, and at the old strength they washed the vista grey.
+  g.globalAlpha = Math.min(1, warm * 0.62) * NEB_MIX;
   g.drawImage(NEB_FAR, -fw * 0.5 * brf, -fh * 0.5 * brf, fw * brf, fh * brf);
   g.restore();
   const nw = W + 160;
@@ -1211,7 +1240,7 @@ function drawBackground(g, t, cam) {
   g.save();
   g.translate(W * 0.5 + cam.x * 1.1 - ((t * 4.2) % 140), nh * 0.5 - 46 + cam.y * 1.1);
   g.rotate(-0.004 * t + 0.008);
-  g.globalAlpha = Math.min(1, warm * 0.78);
+  g.globalAlpha = Math.min(1, warm * 0.78) * NEB_MIX;
   g.drawImage(NEB_NEAR, -nw * 0.5, -nh * 0.5, nw, nh);
   g.restore();
   g.restore();
@@ -1285,7 +1314,12 @@ function drawBackground(g, t, cam) {
     const x = s.x + cam.x * s.px * 2.2;
     const y = s.y + cam.y * s.px * 2.2;
     const tw = 0.72 + 0.28 * Math.sin(t * s.tw + s.ph);
-    const a = s.a * tw;
+    // Two alphas: the dot steps aside for the real starfield underneath, the
+    // streak does not. The streak is the room flinching at an impact, and the
+    // new field has no equivalent — dimming it would cost the flinch to solve
+    // a crowding problem the flinch was never part of.
+    const a = s.a * tw * STAR_MIX;
+    const aStreak = s.a * tw;
     g.globalAlpha = a;
     g.fillStyle = rgba(COL.wall, 1);
     g.beginPath();
@@ -1309,7 +1343,7 @@ function drawBackground(g, t, cam) {
       const dy = y - b.cy;
       const d = Math.hypot(dx, dy) || 1;
       const ln = st * (16 + s.px * 42) * Math.min(1, 900 / d);
-      g.globalAlpha = a * st * 0.7;
+      g.globalAlpha = aStreak * st * 0.7;
       g.lineWidth = Math.min(1.4, s.r);
       g.strokeStyle = rgba(COL.wall, 1);
       g.beginPath();
