@@ -21,6 +21,41 @@ are kept untouched.
 | `promo/teaser-coming-soon.mp4` | the ~24s teaser: galaxy vista with the game's pitch as cards, the ship's hero run and charge, and its strike white-out smash-cutting into the whole title beat |
 | `promo/teaser-august-2026.mp4` | the same teaser, closing on "AUGUST 2026" |
 | `promo/trailer.mp4` | the ~83s trailer: a gas giant with a star cresting its limb, a graveyard of hulls with something waking in it, one live ship and the line it cashes, three half-lit hunters, a six-kill rush, and the title beat |
+| `promo/story-*.mp4` | the story cut — nine clips, and `story-full.mp4` with all of them end to end |
+
+## The story cut (`story.mjs`)
+
+The author's copy, in order: **IN OUR WORLD… / THERE'S LOVE… / THERE'S DEATH… /
+BUT… AMONGST ALL… / THERE'S YOU.** — then gameplay, the peak, the title with
+the ship, and the date.
+
+Delivered as nine separate files *and* as one assembled piece, because it is cut
+against music in an editor and the muxer here writes no audio track at all.
+Separate clips means beats can be retimed against a track without re-rendering.
+
+Every clip fades up from black and back down to it, so the assembled cut needs
+no concatenation step and has no seam to get wrong — `FULL` dispatches on
+cumulative time, and the joins *are* the dips.
+
+Two things it is worth not re-learning:
+
+- **The kill count in a card is derived, not chosen.** The first pass scattered
+  bodies and asked which happened to land near the line; two did, and the card
+  still said ANNIHILATION over a board that had mostly survived. The line is
+  authored first and the bodies are placed on it, so `QUAD` is four and
+  `ANNIHILATION` is the seven that `MULTI_NAMES` says it is. In a game whose
+  entire promise is that the preview does not lie, that is the one mistake not
+  available.
+- **Glow strokes need round joins.** The face is stroked twice, once at ~2.6x
+  width for the halo. A mitre is a spike whose length scales with line width, so
+  at that weight every corner of every glyph threw a long shard and the word
+  appeared to have a broken duplicate behind it.
+
+```js
+await RUNCLIP('05')     // substring match on the key is enough
+await RUNCLIPS()        // all nine, in order
+await RUNSTORY()        // the assembled cut
+```
 
 mp4s are 1920×1080@60, ~12 Mbps. GIFs are 560×315 under itch's 3 MB limit.
 The teasers are mp4-only — 24 seconds does not fit under a 3 MB GIF cap at

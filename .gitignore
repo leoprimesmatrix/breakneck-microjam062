@@ -29,3 +29,7 @@ tools/tmp/
 # with `await RUNFULL()` and `await RUNT('soon'|'date')`.
 promo/trailer.mp4
 promo/teaser-*.mp4
+# Same rule, same reason: the assembled story cut is 77 MB. Its nine clips are
+# committed — those are the pieces that get dragged into an editor — and this is
+# just them played end to end, one `await RUNSTORY()` away.
+promo/story-full.mp4

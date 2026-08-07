@@ -92,6 +92,31 @@
       return enc.encodeVariant(tv, names[v], { gif: false, ...opts });
     };
 
+    /**
+     * The story cut. `RUNCLIP(key)` renders one beat to promo/story-<key>.mp4,
+     * `RUNSTORY()` renders the assembled piece, `RUNCLIPS()` does every clip in
+     * order. mp4 only — these are cut together with music in an editor, which
+     * is the whole reason they are separate files.
+     */
+    window.STORY = () => import('./story.mjs');
+    window.RUNCLIP = async (key, opts = {}) => {
+      const st = await import('./story.mjs');
+      const enc = await import('./encode.mjs');
+      const c = st.clip(key);
+      return enc.encodeVariant(c, 'story-' + c.VARIANT, { gif: false, bitrate: 12_000_000, ...opts });
+    };
+    window.RUNCLIPS = async (opts = {}) => {
+      const st = await import('./story.mjs');
+      const out = [];
+      for (const k of st.KEYS) out.push({ k, ...(await window.RUNCLIP(k, opts)) });
+      return out;
+    };
+    window.RUNSTORY = async (opts = {}) => {
+      const st = await import('./story.mjs');
+      const enc = await import('./encode.mjs');
+      return enc.encodeVariant(st.FULL, 'story-full', { gif: false, bitrate: 10_000_000, ...opts });
+    };
+
     /** Full render of one variant to promo/: mp4 + gif. Poll window.__prog. */
     window.RUNV = async (v, opts = {}) => {
       const names = {

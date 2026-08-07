@@ -59,8 +59,13 @@ import { drawVista } from './vista.mjs';
 
 // ------------------------------------------------------------------ variant
 const VQ = new URL(import.meta.url).searchParams.get('v') || 'plain';
+// `shipplain` is the title beat with the ship arrival and *no* closing words —
+// it exists so the story cut can end the title on the mark and give the date
+// its own clip, rather than saying it twice.
 export const VARIANT =
-  ['plain', 'soon', 'date', 'shipsoon', 'shipdate', 'shipstrike'].includes(VQ) ? VQ : 'plain';
+  ['plain', 'soon', 'date', 'shipsoon', 'shipdate', 'shipstrike', 'shipplain'].includes(VQ)
+    ? VQ
+    : 'plain';
 const SUBTITLE =
   VARIANT === 'soon' || VARIANT === 'shipsoon' || VARIANT === 'shipstrike'
     ? { cold: 'COMING ', hot: 'SOON.' }
@@ -86,7 +91,7 @@ const SHIP = VARIANT.startsWith('ship');
 const EQ = new URL(import.meta.url).searchParams.get('e');
 export const ENTRANCE = ['sweep', 'dive', 'strafe'].includes(EQ)
   ? EQ
-  : VARIANT === 'shipdate' ? 'dive'
+  : VARIANT === 'shipdate' || VARIANT === 'shipplain' ? 'dive'
   : VARIANT === 'shipstrike' ? 'strafe'
   : 'sweep';
 
