@@ -59,11 +59,36 @@ import { drawVista } from './vista.mjs';
 
 // ------------------------------------------------------------------ variant
 const VQ = new URL(import.meta.url).searchParams.get('v') || 'plain';
-export const VARIANT = ['plain', 'soon', 'date', 'shipsoon', 'shipdate'].includes(VQ) ? VQ : 'plain';
+export const VARIANT =
+  ['plain', 'soon', 'date', 'shipsoon', 'shipdate', 'shipstrike'].includes(VQ) ? VQ : 'plain';
 const SUBTITLE =
-  VARIANT === 'soon' || VARIANT === 'shipsoon' ? { cold: 'COMING ', hot: 'SOON.' } :
-  VARIANT === 'date' || VARIANT === 'shipdate' ? { cold: 'AUGUST ', hot: '2026' } : null;
+  VARIANT === 'soon' || VARIANT === 'shipsoon' || VARIANT === 'shipstrike'
+    ? { cold: 'COMING ', hot: 'SOON.' }
+    : VARIANT === 'date' || VARIANT === 'shipdate'
+      ? { cold: 'AUGUST ', hot: '2026' }
+      : null;
 const SHIP = VARIANT.startsWith('ship');
+
+/**
+ * How the interceptor arrives. Deliberately a separate axis from what the
+ * flash leaves behind: the entrance is choreography and the subtitle is copy,
+ * and coupling them would mean a new arrival could only ever ship with a new
+ * word. `seq.mjs?v=shipsoon&e=dive` is a legal thing to ask for.
+ *
+ *   sweep   a diving pass low across the deck, hooking up into the coil —
+ *           the original, and the one that shows off the reflection.
+ *   dive    out of the planet's limb, tiny, growing as it comes at the
+ *           camera. The vista finally earns its keep as staging rather than
+ *           as wallpaper: the ship has somewhere to have come *from*.
+ *   strafe  a full-speed crossing right to left under the mark, overshooting
+ *           wide and hooking back into the coil against its own momentum.
+ */
+const EQ = new URL(import.meta.url).searchParams.get('e');
+export const ENTRANCE = ['sweep', 'dive', 'strafe'].includes(EQ)
+  ? EQ
+  : VARIANT === 'shipdate' ? 'dive'
+  : VARIANT === 'shipstrike' ? 'strafe'
+  : 'sweep';
 
 export const W = 1920;
 export const H = 1080;
@@ -277,10 +302,26 @@ const HORIZON = H * 0.802;
  * backdrop look like five renders of one asset; giving the ship variants their
  * own worlds makes the set read as a campaign. `vista.mjs` documents each.
  */
+/**
+ * Sky per variant. Not arbitrary — it is paired with the entrance.
+ *
+ * `dive` starts at the top right and its whole idea is that the ship has
+ * somewhere to have come *from*, so it needs the staging whose planet is in
+ * that corner: `companion`. Paired with `rise`, whose world is on the left,
+ * the ship emerges out of empty sky and the shot silently loses its point —
+ * which is exactly what the first pass did.
+ */
 const STAGE =
   VARIANT === 'shipsoon' ? 'eclipse' :
-  VARIANT === 'shipdate' ? 'rise' :
+  VARIANT === 'shipdate' ? 'companion' :
+  VARIANT === 'shipstrike' ? 'rise' :
   'companion';
+// The pairing above is easy to break by editing one table and not the other,
+// and the failure mode is a ship arriving from nowhere — which reads as a bug
+// in the path rather than as a bug in the staging.
+if (SHIP && ENTRANCE === 'dive' && STAGE !== 'companion') {
+  console.warn(`[seq] dive over ${STAGE}: nothing in the upper right to emerge from`);
+}
 
 /**
  * How much of the old flat nebula survives on top of the new sky, and how much
@@ -693,6 +734,60 @@ const SHIP_P = [
   { x: W * 0.335, y: H * 0.885 },
   { x: SHIP_C.x, y: SHIP_C.y },
 ];
+
+/**
+ * The three arrivals, as data. Each is a cubic into the same coil point, plus
+ * the two things that actually distinguish an approach on screen: how big the
+ * ship reads along the way, and how it eases.
+ *
+ * `size` is the one that matters and the one a path alone cannot express. A
+ * ship that holds its size is flying *across* the room; a ship that grows is
+ * flying *at* you. `dive` spends most of its length small and does almost all
+ * its growing in the last third — that acceleration is the whole read, and a
+ * linear ramp over the same path just looks like a zoom.
+ */
+const DIVE_P = [
+  // Out of the planet's limb. Which planet is up to the variant's sky, but all
+  // three stagings keep something bright in the upper right to emerge from.
+  { x: W * 0.885, y: H * 0.185 },
+  { x: W * 0.86, y: H * 0.62 },
+  { x: W * 0.60, y: H * 1.0 },
+  { x: SHIP_C.x, y: SHIP_C.y },
+];
+const STRAFE_P = [
+  { x: W + 420, y: H * 0.60 },
+  { x: W * 0.44, y: H * 0.655 },
+  { x: W * 0.10, y: H * 0.90 },
+  { x: SHIP_C.x, y: SHIP_C.y },
+];
+
+const ENTRANCES = {
+  sweep: {
+    p: SHIP_P,
+    ease: easeOutCubic,
+    size: (u) => 40 + 20 * u,
+    // Rolls out of the entry, then banks with the path's own curvature.
+    bank: (turn, u) => clamp(turn * 16, -0.62, 0.62) + (1 - u) * (1 - u) * 0.55,
+  },
+  dive: {
+    p: DIVE_P,
+    // Nearly linear early so it hangs in the distance, then lets the path's
+    // own curve do the arrival. Cubic-out here would spend the whole shot
+    // already-arrived.
+    ease: (u) => u * (0.45 + 0.55 * u),
+    size: (u) => 7 + 53 * u * u * u,
+    bank: (turn, u) => clamp(turn * 13, -0.7, 0.7) + u * u * 0.5,
+  },
+  strafe: {
+    p: STRAFE_P,
+    // Enters at full speed and spends the whole beat bleeding it off, which is
+    // what makes the hook back to centre read as a decision rather than a path.
+    ease: easeOutQuint,
+    size: (u) => 34 + 26 * u,
+    bank: (turn, u) => clamp(turn * 18, -0.85, 0.85) - (1 - u) * 0.35,
+  },
+};
+const ENT = ENTRANCES[ENTRANCE];
 function bez3(p, u) {
   const iu = 1 - u;
   return {
@@ -709,25 +804,26 @@ function bez3d(p, u) {
 }
 
 /** The heading the approach path arrives on — the charge pitches up from it. */
-const ENTRY_ANG = Math.atan2(SHIP_P[3].y - SHIP_P[2].y, SHIP_P[3].x - SHIP_P[2].x);
+const ENTRY_ANG = Math.atan2(ENT.p[3].y - ENT.p[2].y, ENT.p[3].x - ENT.p[2].x);
 
 /** Where the interceptor is and what it is doing, at any instant of the beat. */
 function shipPose(t) {
   if (!SHIP || t < SHIP_T0) return null;
   if (t < SHIP_T0 + APPR) {
-    const u = easeOutCubic(clamp01((t - SHIP_T0) / APPR)) * 0.999;
-    const p = bez3(SHIP_P, u);
-    const d = bez3d(SHIP_P, u);
-    const ahead = bez3d(SHIP_P, Math.min(1, u + 0.03));
+    const u = ENT.ease(clamp01((t - SHIP_T0) / APPR)) * 0.999;
+    const p = bez3(ENT.p, u);
+    const d = bez3d(ENT.p, u);
+    const ahead = bez3d(ENT.p, Math.min(1, u + 0.03));
     const turn = wrapTo(Math.atan2(ahead.y, ahead.x) - Math.atan2(d.y, d.x), TAU);
     return {
       x: p.x,
-      y: p.y + Math.sin(t * 2.1) * 4,
+      // The idle bob scales with how close the ship reads: a dot at the far end
+      // of a dive that wobbles four pixels is a dot with a twitch, not a ship.
+      y: p.y + Math.sin(t * 2.1) * 4 * clamp01(ENT.size(u) / 60),
       angle: Math.atan2(d.y, d.x),
-      r: 40 + 20 * u,
+      r: ENT.size(u),
       thrust: 0.92,
-      // Rolls out of the entry, then banks with the path's own curvature.
-      bank: clamp(turn * 16, -0.62, 0.62) + (1 - u) * (1 - u) * 0.55,
+      bank: ENT.bank(turn, u),
       charge: 0,
       stretch: 0,
     };
@@ -1651,6 +1747,8 @@ export function render(t) {
 
 export const marks = {
   VARIANT,
+  ENTRANCE: SHIP ? ENTRANCE : null,
+  STAGE,
   SHATTER,
   LOCK,
   TAG_T,
