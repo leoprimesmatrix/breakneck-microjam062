@@ -19,3 +19,13 @@ promo/titlecard2/tmp/
 
 # The no-node toolchain writes its screenshots here.
 tools/tmp/
+
+# The long-form video. Everything else made to sell this game is committed at
+# full size — that rule is in the README and it is a good one — but the trailer
+# is 92 MB and the two teasers are 37 MB each, and a blob that size is paid for
+# by every clone forever, with no way to take it back out of history later.
+# The six title cards *are* committed: they are the assets that actually get
+# attached to a page or a post. Re-render these three from promo/titlecard2/
+# with `await RUNFULL()` and `await RUNT('soon'|'date')`.
+promo/trailer.mp4
+promo/teaser-*.mp4
